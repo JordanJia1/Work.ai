@@ -4,7 +4,6 @@ import {
   BusyInterval,
   generateWeeklySchedule,
   normalizeSchedulePreferences,
-  ScheduledBlock,
   TaskAnalysis,
 } from "@/lib/planner";
 
@@ -41,6 +40,14 @@ type GoogleFreeBusyResponse = {
   >;
 };
 
+type GoogleEventsResponse = {
+  items?: Array<{
+    status?: string;
+    start?: { dateTime?: string; date?: string };
+    end?: { dateTime?: string; date?: string };
+  }>;
+};
+
 function isTaskAnalysisArray(value: unknown): value is TaskAnalysis[] {
   if (!Array.isArray(value)) return false;
   return value.every((item) => {
@@ -54,22 +61,6 @@ function isTaskAnalysisArray(value: unknown): value is TaskAnalysis[] {
       typeof task.estimatedHours === "number" &&
       typeof task.urgencyScore === "number" &&
       typeof task.priorityScore === "number"
-    );
-  });
-}
-
-function isScheduledBlockArray(value: unknown): value is ScheduledBlock[] {
-  if (!Array.isArray(value)) return false;
-  return value.every((item) => {
-    if (typeof item !== "object" || item === null) return false;
-    const block = item as Partial<ScheduledBlock>;
-    return (
-      typeof block.taskId === "string" &&
-      typeof block.taskTitle === "string" &&
-      typeof block.startISO === "string" &&
-      typeof block.endISO === "string" &&
-      typeof block.minutes === "number" &&
-      typeof block.calendarDescription === "string"
     );
   });
 }
@@ -117,31 +108,41 @@ function toBusyIntervals(payload: GoogleFreeBusyResponse): BusyInterval[] {
   return intervals;
 }
 
-function sameInterval(a: { startISO: string; endISO: string }, b: { startISO: string; endISO: string }): boolean {
-  const aStart = new Date(a.startISO).getTime();
-  const aEnd = new Date(a.endISO).getTime();
-  const bStart = new Date(b.startISO).getTime();
-  const bEnd = new Date(b.endISO).getTime();
+function toBusyIntervalsFromEvents(payloads: GoogleEventsResponse[]): BusyInterval[] {
+  const intervals: BusyInterval[] = [];
 
-  return (
-    Number.isFinite(aStart) &&
-    Number.isFinite(aEnd) &&
-    Number.isFinite(bStart) &&
-    Number.isFinite(bEnd) &&
-    aStart === bStart &&
-    aEnd === bEnd
-  );
+  for (const payload of payloads) {
+    for (const event of payload.items ?? []) {
+      if (event.status === "cancelled") continue;
+      const startRaw = event.start?.dateTime ?? event.start?.date;
+      const endRaw = event.end?.dateTime ?? event.end?.date;
+      if (!startRaw || !endRaw) continue;
+
+      const start = new Date(startRaw);
+      const end = new Date(endRaw);
+      if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) continue;
+      if (end <= start) continue;
+
+      intervals.push({
+        startISO: start.toISOString(),
+        endISO: end.toISOString(),
+      });
+    }
+  }
+
+  return intervals;
 }
 
-function filterAppManagedBusyIntervals(
-  busyIntervals: BusyInterval[],
-  currentSchedule: ScheduledBlock[],
-): BusyInterval[] {
-  if (!currentSchedule.length) return busyIntervals;
-
-  return busyIntervals.filter(
-    (busy) => !currentSchedule.some((block) => sameInterval(busy, block)),
-  );
+function dedupeIntervals(intervals: BusyInterval[]): BusyInterval[] {
+  const seen = new Set<string>();
+  const deduped: BusyInterval[] = [];
+  for (const interval of intervals) {
+    const key = `${interval.startISO}|${interval.endISO}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(interval);
+  }
+  return deduped;
 }
 
 async function getSelectedCalendarIds(
@@ -177,7 +178,6 @@ async function getSelectedCalendarIds(
 export async function POST(request: NextRequest) {
   const body = (await request.json()) as {
     analysis?: unknown;
-    currentSchedule?: unknown;
     schedulePreferences?: unknown;
     ignoredCalendarIds?: unknown;
   };
@@ -185,15 +185,11 @@ export async function POST(request: NextRequest) {
   if (!isTaskAnalysisArray(body.analysis)) {
     return NextResponse.json({ error: "Invalid analysis payload" }, { status: 400 });
   }
-  if (body.currentSchedule !== undefined && !isScheduledBlockArray(body.currentSchedule)) {
-    return NextResponse.json({ error: "Invalid currentSchedule payload" }, { status: 400 });
-  }
   if (body.ignoredCalendarIds !== undefined && !isStringArray(body.ignoredCalendarIds)) {
     return NextResponse.json({ error: "Invalid ignoredCalendarIds payload" }, { status: 400 });
   }
 
   const analysis = body.analysis;
-  const currentSchedule = (body.currentSchedule as ScheduledBlock[] | undefined) ?? [];
   const schedulePreferences = normalizeSchedulePreferences(body.schedulePreferences);
   const ignoredCalendarIds = new Set((body.ignoredCalendarIds as string[] | undefined) ?? []);
   if (analysis.length === 0) {
@@ -258,10 +254,40 @@ export async function POST(request: NextRequest) {
       );
     }
     const freeBusyPayload = (await freeBusyResponse.json()) as GoogleFreeBusyResponse;
-    busyIntervals = filterAppManagedBusyIntervals(
-      toBusyIntervals(freeBusyPayload),
-      currentSchedule,
+    const freeBusyIntervals = toBusyIntervals(freeBusyPayload);
+
+    const query = new URLSearchParams({
+      singleEvents: "true",
+      orderBy: "startTime",
+      timeMin: timeMin.toISOString(),
+      timeMax: timeMax.toISOString(),
+      maxResults: "250",
+    });
+    const eventResponses = await Promise.allSettled(
+      calendarIds.map(async (id) => {
+        const response = await fetch(
+          `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(id)}/events?${query.toString()}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+            },
+            cache: "no-store",
+          },
+        );
+        if (!response.ok) return null;
+        return (await response.json()) as GoogleEventsResponse;
+      }),
     );
+    const eventPayloads = eventResponses
+      .filter(
+        (result): result is PromiseFulfilledResult<GoogleEventsResponse | null> =>
+          result.status === "fulfilled",
+      )
+      .map((result) => result.value)
+      .filter((payload): payload is GoogleEventsResponse => payload !== null);
+
+    const eventBusyIntervals = toBusyIntervalsFromEvents(eventPayloads);
+    busyIntervals = dedupeIntervals([...freeBusyIntervals, ...eventBusyIntervals]);
   }
 
   const schedule = generateWeeklySchedule(analysis, busyIntervals, schedulePreferences);

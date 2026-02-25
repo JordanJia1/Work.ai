@@ -337,7 +337,17 @@ export function generateWeeklySchedule(
 ): ScheduledBlock[] {
   const preferences = normalizeSchedulePreferences(preferencesInput);
   const schedulingStart = getSchedulingStart(new Date(), preferences);
-  const workDays = nextCalendarDays(schedulingStart, 7).filter((day) => {
+  const latestDeadlineMs = analysis.reduce((latest, task) => {
+    const ms = parseDeadline(task.deadline).getTime();
+    return Number.isFinite(ms) ? Math.max(latest, ms) : latest;
+  }, schedulingStart.getTime());
+  const dayMs = 24 * 60 * 60 * 1000;
+  const daysUntilLatestDeadline = Math.max(
+    7,
+    Math.ceil((latestDeadlineMs - schedulingStart.getTime()) / dayMs) + 1,
+  );
+  const planningDays = Math.max(7, Math.min(21, daysUntilLatestDeadline));
+  const workDays = nextCalendarDays(schedulingStart, planningDays).filter((day) => {
     const dayRule = preferences.dayRules.find((rule) => rule.weekday === day.getDay());
     return !!dayRule?.enabled;
   });
@@ -409,7 +419,7 @@ export function generateWeeklySchedule(
       startISO: formatLocalDateToISO(start),
       endISO: formatLocalDateToISO(end),
       minutes,
-      calendarDescription: `${task.details}\nPriority: ${task.priorityLabel} (${task.priorityScore}/100)\nEstimated effort: ${task.estimatedHours}h\nDeadline: ${task.deadline}`,
+      calendarDescription: `${task.details}\nPriority: ${task.priorityLabel} (${task.priorityScore}/100)\nEstimated effort: ${task.estimatedHours}h\nDeadline: ${task.deadline}\nWork.ai Task ID: ${task.id}`,
     });
     plannedBusyIntervals.push({
       startISO: start.toISOString(),

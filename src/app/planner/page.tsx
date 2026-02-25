@@ -42,6 +42,7 @@ type CalendarSnapshotEvent = {
   startISO: string;
   endISO: string;
   allDay: boolean;
+  description: string;
 };
 
 type WeekCalendarEvent = CalendarSnapshotEvent & {
@@ -160,6 +161,15 @@ function findMatchingSnapshotEvent(
   block: ScheduledBlock,
   snapshotEvents: CalendarSnapshotEvent[],
 ): CalendarSnapshotEvent | null {
+  const descriptionTaskIdMatch = snapshotEvents.find((event) => {
+    if (event.allDay) return false;
+    if (!event.description.includes(`Work.ai Task ID: ${block.taskId}`)) return false;
+    const sameStart = areCloseTimes(event.startISO, block.startISO);
+    const sameEnd = areCloseTimes(event.endISO, block.endISO);
+    return sameStart && sameEnd;
+  });
+  if (descriptionTaskIdMatch) return descriptionTaskIdMatch;
+
   return (
     snapshotEvents.find((event) => {
       if (event.allDay) return false;
@@ -498,7 +508,8 @@ function isCalendarSnapshotEventArray(value: unknown): value is CalendarSnapshot
       typeof event.title === "string" &&
       typeof event.startISO === "string" &&
       typeof event.endISO === "string" &&
-      typeof event.allDay === "boolean"
+      typeof event.allDay === "boolean" &&
+      (event.description === undefined || typeof event.description === "string")
     );
   });
 }
@@ -548,7 +559,10 @@ function loadPersistedData(): PersistedData | null {
         ? parsed.syncedEventTaskMap
         : {},
       calendarSnapshot: isCalendarSnapshotEventArray(parsed.calendarSnapshot)
-        ? parsed.calendarSnapshot
+        ? parsed.calendarSnapshot.map((event) => ({
+            ...event,
+            description: event.description ?? "",
+          }))
         : [],
       googleCalendars: isGoogleCalendarListArray(parsed.googleCalendars)
         ? parsed.googleCalendars

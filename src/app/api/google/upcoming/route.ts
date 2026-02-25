@@ -4,6 +4,7 @@ import { getValidAccessToken } from "@/lib/google-auth";
 type GoogleEvent = {
   id?: string;
   summary?: string;
+  description?: string;
   status?: string;
   start?: { dateTime?: string; date?: string };
   end?: { dateTime?: string; date?: string };
@@ -27,6 +28,7 @@ type CalendarSnapshotEvent = {
   startISO: string;
   endISO: string;
   allDay: boolean;
+  description: string;
 };
 
 function normalizeEvent(event: GoogleEvent): CalendarSnapshotEvent | null {
@@ -48,6 +50,7 @@ function normalizeEvent(event: GoogleEvent): CalendarSnapshotEvent | null {
     startISO: start.toISOString(),
     endISO: end.toISOString(),
     allDay,
+    description: event.description?.trim() ?? "",
   };
 }
 
