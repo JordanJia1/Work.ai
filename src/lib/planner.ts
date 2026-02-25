@@ -311,6 +311,52 @@ function addMinutes(date: Date, minutes: number): Date {
   return next;
 }
 
+function capBlocksToTaskEstimates(
+  blocks: ScheduledBlock[],
+  analysis: TaskAnalysis[],
+  slotMinutes: number,
+): ScheduledBlock[] {
+  const targetMinutesByTask = new Map<string, number>();
+  for (const task of analysis) {
+    const rawMinutes = task.estimatedHours * 60;
+    if (rawMinutes <= 0) {
+      targetMinutesByTask.set(task.id, 0);
+      continue;
+    }
+    const rounded = Math.max(slotMinutes, Math.ceil(rawMinutes / slotMinutes) * slotMinutes);
+    targetMinutesByTask.set(task.id, rounded);
+  }
+
+  const usedMinutesByTask = new Map<string, number>();
+  const capped: ScheduledBlock[] = [];
+
+  for (const block of blocks) {
+    const target = targetMinutesByTask.get(block.taskId);
+    if (target === undefined || target <= 0) continue;
+    const used = usedMinutesByTask.get(block.taskId) ?? 0;
+    const remaining = target - used;
+    if (remaining <= 0) continue;
+
+    if (block.minutes <= remaining) {
+      capped.push(block);
+      usedMinutesByTask.set(block.taskId, used + block.minutes);
+      continue;
+    }
+
+    const start = new Date(block.startISO);
+    if (!Number.isFinite(start.getTime())) continue;
+    const end = addMinutes(start, remaining);
+    capped.push({
+      ...block,
+      endISO: end.toISOString(),
+      minutes: remaining,
+    });
+    usedMinutesByTask.set(block.taskId, target);
+  }
+
+  return capped;
+}
+
 export function generateWeeklySchedule(
   analysis: TaskAnalysis[],
   busyIntervals: BusyInterval[] = [],
@@ -505,7 +551,8 @@ export function generateWeeklySchedule(
   }
 
   const mergedBlocks = mergeSequentialBlocks(blocks);
-  return mergedBlocks.filter((block) => !blockOverlapsBusy(block, busyIntervals));
+  const nonOverlappingBlocks = mergedBlocks.filter((block) => !blockOverlapsBusy(block, busyIntervals));
+  return capBlocksToTaskEstimates(nonOverlappingBlocks, analysis, slotMinutes);
 }
 
 export function toGoogleCalendarDate(isoLikeLocal: string): string {
@@ -513,13 +560,19 @@ export function toGoogleCalendarDate(isoLikeLocal: string): string {
   return date.toISOString().replace(/[-:]/g, "").split(".")[0] + "Z";
 }
 
-export function createGoogleCalendarLink(block: ScheduledBlock): string {
+export function createGoogleCalendarLink(
+  block: ScheduledBlock,
+  targetCalendarId?: string | null,
+): string {
   const params = new URLSearchParams({
     action: "TEMPLATE",
     text: block.taskTitle,
     details: block.calendarDescription,
     dates: `${toGoogleCalendarDate(block.startISO)}/${toGoogleCalendarDate(block.endISO)}`,
   });
+  if (targetCalendarId && targetCalendarId.trim().length > 0) {
+    params.set("src", targetCalendarId);
+  }
 
   return `https://calendar.google.com/calendar/render?${params.toString()}`;
 }

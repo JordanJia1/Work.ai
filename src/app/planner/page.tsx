@@ -9,7 +9,6 @@ import { WorkAiLogo } from "@/components/work-ai-logo";
 import {
   BusyInterval,
   DEFAULT_SCHEDULE_PREFERENCES,
-  createGoogleCalendarLink,
   generateWeeklySchedule,
   normalizeSchedulePreferences,
   ScheduledBlock,
@@ -628,6 +627,8 @@ export default function Home() {
   const [googleCalendars, setGoogleCalendars] = useState<GoogleCalendarListItem[]>([]);
   const [googleCalendarsLoading, setGoogleCalendarsLoading] = useState(false);
   const [googleCalendarsError, setGoogleCalendarsError] = useState<string | null>(null);
+  const [workCalendarId, setWorkCalendarId] = useState<string | null>(null);
+  const [workCalendarLabel, setWorkCalendarLabel] = useState<string>("Primary");
   const [ignoredCalendarIds, setIgnoredCalendarIds] = useState<string[]>([]);
   const [calendarSnapshotError, setCalendarSnapshotError] = useState<string | null>(null);
   const [calendarSnapshotLabel, setCalendarSnapshotLabel] = useState<string | null>(null);
@@ -653,6 +654,8 @@ export default function Home() {
   const [overrideHoursInput, setOverrideHoursInput] = useState<string>("");
   const [overridePriorityInput, setOverridePriorityInput] = useState<string>("");
   const [overrideUrgencyInput, setOverrideUrgencyInput] = useState<string>("");
+  const [addCalendarBlockKey, setAddCalendarBlockKey] = useState<string | null>(null);
+  const [addCalendarError, setAddCalendarError] = useState<string | null>(null);
   const [photoUploadLoading, setPhotoUploadLoading] = useState(false);
   const [photoUploadError, setPhotoUploadError] = useState<string | null>(null);
   const [photoUploadMessage, setPhotoUploadMessage] = useState<string | null>(null);
@@ -665,6 +668,7 @@ export default function Home() {
   });
   const scheduleSignatureRef = useRef<string>("");
   const scheduleRef = useRef<ScheduledBlock[]>([]);
+  const schedulePrefsSignatureRef = useRef<string>("");
   const localHydratedRef = useRef(false);
   const cloudSyncTimer = useRef<number | null>(null);
   const cloudHydratedRef = useRef(false);
@@ -686,12 +690,36 @@ export default function Home() {
     () => buildCalendarWeekView(calendarSnapshot),
     [calendarSnapshot],
   );
+  const syncedMinutesByTaskId = useMemo(() => {
+    const minutes: Record<string, number> = {};
+    for (const event of calendarSnapshot) {
+      const taskId = syncedEventTaskMap[event.id];
+      if (!taskId || event.allDay) continue;
+      const start = new Date(event.startISO).getTime();
+      const end = new Date(event.endISO).getTime();
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+      const durationMinutes = Math.max(0, Math.round((end - start) / 60000));
+      minutes[taskId] = (minutes[taskId] ?? 0) + durationMinutes;
+    }
+    return minutes;
+  }, [calendarSnapshot, syncedEventTaskMap]);
+  const scheduledMinutesByTaskId = useMemo(() => {
+    const minutes: Record<string, number> = {};
+    for (const block of schedule) {
+      minutes[block.taskId] = (minutes[block.taskId] ?? 0) + block.minutes;
+    }
+    return minutes;
+  }, [schedule]);
   const unscheduledAnalyzedTasks = useMemo(() => {
-    const scheduledTaskIds = new Set(schedule.map((block) => block.taskId));
-    return analysis.filter(
-      (task) => task.estimatedHours > 0 && !scheduledTaskIds.has(task.id),
-    );
-  }, [analysis, schedule]);
+    return analysis.filter((task) => {
+      if (task.estimatedHours <= 0) return false;
+      const scheduledMinutes = scheduledMinutesByTaskId[task.id] ?? 0;
+      const syncedMinutes = syncedMinutesByTaskId[task.id] ?? 0;
+      const targetMinutes = Math.max(30, Math.ceil((task.estimatedHours * 60) / 30) * 30);
+      const remainingMinutes = Math.max(0, targetMinutes - scheduledMinutes - syncedMinutes);
+      return remainingMinutes > 0 && scheduledMinutes === 0;
+    });
+  }, [analysis, scheduledMinutesByTaskId, syncedMinutesByTaskId]);
   const syncedBlocksByTaskId = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const taskId of Object.values(syncedEventTaskMap)) {
@@ -839,6 +867,10 @@ export default function Home() {
   useEffect(() => {
     scheduleRef.current = schedule;
   }, [schedule]);
+
+  useEffect(() => {
+    schedulePrefsSignatureRef.current = JSON.stringify(schedulePreferences);
+  }, []);
 
   useEffect(() => {
     if (!localHydratedRef.current) return;
@@ -1213,9 +1245,19 @@ export default function Home() {
       }
 
       try {
+        const nowMs = Date.now();
+        const futureCandidates = [
+          ...scheduleRef.current.map((block) => new Date(block.endISO).getTime()),
+          ...pendingCalendarMatchesRef.current.map((pending) => new Date(pending.endISO).getTime()),
+        ].filter((value) => Number.isFinite(value) && value > nowMs);
+        const latestMs = futureCandidates.length > 0 ? Math.max(...futureCandidates) : nowMs;
+        const lookaheadDays = Math.max(
+          14,
+          Math.min(60, Math.ceil((latestMs - nowMs) / (24 * 60 * 60 * 1000)) + 2),
+        );
         const params = new URLSearchParams({
-          days: "7",
-          limit: "80",
+          days: String(lookaheadDays),
+          limit: "200",
         });
         if (ignoredCalendarIds.length > 0) {
           params.set("ignoredCalendarIds", ignoredCalendarIds.join(","));
@@ -1368,6 +1410,36 @@ export default function Home() {
     }
   }, [connectedCalendar, authLoading]);
 
+  const ensureWorkCalendar = useCallback(async () => {
+    if (!connectedCalendar) {
+      setWorkCalendarId(null);
+      setWorkCalendarLabel("Primary");
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/google/work-calendar", {
+        method: "POST",
+      });
+      const data = (await response.json()) as {
+        calendarId?: string;
+        created?: boolean;
+      };
+
+      if (!response.ok || !data.calendarId) {
+        setWorkCalendarId(null);
+        setWorkCalendarLabel("Primary");
+        return;
+      }
+
+      setWorkCalendarId(data.calendarId);
+      setWorkCalendarLabel("Work.ai");
+    } catch {
+      setWorkCalendarId(null);
+      setWorkCalendarLabel("Primary");
+    }
+  }, [connectedCalendar]);
+
   const markBlockAdded = useCallback((block: ScheduledBlock) => {
     const alreadyQueued = pendingCalendarMatchesRef.current.some(
       (pending) =>
@@ -1387,13 +1459,75 @@ export default function Home() {
     });
   }, []);
 
+  const handleAddBlockToGoogleCalendar = useCallback(
+    async (block: ScheduledBlock) => {
+      const key = scheduleBlockKey(block);
+      setAddCalendarBlockKey(key);
+      setAddCalendarError(null);
+
+      try {
+        const response = await fetch("/api/google/events/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ block }),
+        });
+        const data = (await response.json()) as {
+          ok?: boolean;
+          error?: string;
+          details?: string;
+        };
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || "Could not add event to Google Calendar");
+        }
+
+        markBlockAdded(block);
+        void refreshCalendarSnapshot({ silent: false });
+        for (const timerId of calendarSnapshotRefreshAfterAddTimers.current) {
+          window.clearTimeout(timerId);
+        }
+        calendarSnapshotRefreshAfterAddTimers.current = [];
+
+        const retryOne = window.setTimeout(() => {
+          void refreshCalendarSnapshot({ silent: true });
+        }, 2000);
+        const retryTwo = window.setTimeout(() => {
+          void refreshCalendarSnapshot({ silent: true });
+        }, 8000);
+        calendarSnapshotRefreshAfterAddTimers.current.push(retryOne, retryTwo);
+        if (showOnboarding && onboardingStep === 2) {
+          setGuidedCalendarClicked(true);
+        }
+      } catch (error) {
+        setAddCalendarError(
+          error instanceof Error ? error.message : "Could not add event to Google Calendar",
+        );
+      } finally {
+        setAddCalendarBlockKey(null);
+      }
+    },
+    [markBlockAdded, onboardingStep, refreshCalendarSnapshot, showOnboarding],
+  );
+
+  useEffect(() => {
+    if (suppressNextAutoScheduleRefreshRef.current) {
+      const currentPrefsSignature = JSON.stringify(schedulePreferences);
+      if (schedulePrefsSignatureRef.current !== currentPrefsSignature) {
+        schedulePrefsSignatureRef.current = currentPrefsSignature;
+      } else {
+        suppressNextAutoScheduleRefreshRef.current = false;
+        return;
+      }
+    } else {
+      schedulePrefsSignatureRef.current = JSON.stringify(schedulePreferences);
+    }
+    refreshSchedule({ silent: false });
+  }, [refreshSchedule, schedulePreferences]);
+
   useEffect(() => {
     if (suppressNextAutoScheduleRefreshRef.current) {
       suppressNextAutoScheduleRefreshRef.current = false;
-      return;
     }
-    refreshSchedule({ silent: false });
-  }, [refreshSchedule]);
+  }, [analysis]);
 
   useEffect(() => {
     refreshCalendarSnapshot({ silent: false });
@@ -1402,6 +1536,10 @@ export default function Home() {
   useEffect(() => {
     refreshGoogleCalendars();
   }, [refreshGoogleCalendars]);
+
+  useEffect(() => {
+    ensureWorkCalendar();
+  }, [ensureWorkCalendar]);
 
   useEffect(() => {
     if (!connectedCalendar) {
@@ -2025,6 +2163,11 @@ export default function Home() {
               Cloud sync: {cloudSyncLabel}
             </p>
             {connectedCalendar && (
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 pink:text-fuchsia-700/80">
+                Add target calendar: {workCalendarLabel}
+              </p>
+            )}
+            {connectedCalendar && (
               <div className="mt-3 rounded-lg border border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/60 pink:border-fuchsia-200 pink:bg-pink-50/80">
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400 pink:text-fuchsia-700">
@@ -2595,6 +2738,11 @@ export default function Home() {
                 )}
               </p>
             )}
+            {addCalendarError && (
+              <p className="mt-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 dark:border-rose-700/60 dark:bg-rose-900/20 dark:text-rose-300 pink:border-rose-300 pink:bg-rose-100/80 pink:text-rose-800">
+                {addCalendarError}
+              </p>
+            )}
             {unscheduledAnalyzedTasks.length > 0 && (
               <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 dark:border-amber-700/50 dark:bg-amber-900/20 dark:text-amber-300 pink:border-amber-300 pink:bg-amber-100/70 pink:text-amber-800">
                 {unscheduledAnalyzedTasks.length} analyzed task
@@ -2653,38 +2801,19 @@ export default function Home() {
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
-                    <a
-                      href={createGoogleCalendarLink(block)}
-                      target="_blank"
-                      rel="noreferrer"
+                    <Button
+                      type="button"
+                      variant={connectedCalendar ? "default" : "outline"}
+                      disabled={!connectedCalendar || addCalendarBlockKey === scheduleBlockKey(block)}
                       onClick={() => {
-                        markBlockAdded(block);
-                        void refreshCalendarSnapshot({ silent: false });
-                        for (const timerId of calendarSnapshotRefreshAfterAddTimers.current) {
-                          window.clearTimeout(timerId);
-                        }
-                        calendarSnapshotRefreshAfterAddTimers.current = [];
-
-                        const retryOne = window.setTimeout(() => {
-                          void refreshCalendarSnapshot({ silent: true });
-                        }, 2000);
-                        const retryTwo = window.setTimeout(() => {
-                          void refreshCalendarSnapshot({ silent: true });
-                        }, 8000);
-                        calendarSnapshotRefreshAfterAddTimers.current.push(retryOne, retryTwo);
-                        if (showOnboarding && onboardingStep === 2) {
-                          setGuidedCalendarClicked(true);
-                        }
+                        void handleAddBlockToGoogleCalendar(block);
                       }}
+                      className={`h-8 px-3 text-xs ${showOnboarding && onboardingStep === 2 ? "ring-2 ring-emerald-300 dark:ring-emerald-600 pink:ring-fuchsia-400" : ""}`}
                     >
-                      <Button
-                        type="button"
-                        variant={connectedCalendar ? "default" : "outline"}
-                        className={`h-8 px-3 text-xs ${showOnboarding && onboardingStep === 2 ? "ring-2 ring-emerald-300 dark:ring-emerald-600 pink:ring-fuchsia-400" : ""}`}
-                      >
-                        Add to Google Calendar
-                      </Button>
-                    </a>
+                      {addCalendarBlockKey === scheduleBlockKey(block)
+                        ? "Adding..."
+                        : "Add to Google Calendar"}
+                    </Button>
                   </div>
                 </div>
               ))}

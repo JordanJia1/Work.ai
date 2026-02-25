@@ -61,8 +61,8 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const days = Math.max(1, Math.min(14, Number(searchParams.get("days") ?? 7)));
-  const limit = Math.max(5, Math.min(120, Number(searchParams.get("limit") ?? 80)));
+  const days = Math.max(1, Math.min(60, Number(searchParams.get("days") ?? 14)));
+  const limit = Math.max(5, Math.min(500, Number(searchParams.get("limit") ?? 200)));
   const ignoredCalendarIds = new Set(
     (searchParams.get("ignoredCalendarIds") ?? "")
       .split(",")
