@@ -77,6 +77,7 @@ type PersistedData = {
   aiAnalysis: TaskAnalysis[] | null;
   schedulePreferences: SchedulePreferences;
   ignoredCalendarIds: string[];
+  targetCalendarId: string | null;
   schedule: ScheduledBlock[];
   syncedEventTaskMap: Record<string, string>;
   calendarSnapshot: CalendarSnapshotEvent[];
@@ -88,6 +89,10 @@ type TimelineDay = {
   label: string;
   minutes: number;
   blocks: number;
+};
+
+type RadarTask = TaskAnalysis & {
+  agedUrgencyScore: number;
 };
 
 const STORAGE_KEY = "workflow_planner_v1";
@@ -186,6 +191,11 @@ function findMatchingSnapshotEvent(
       return sameTitle && sameStart && sameEnd;
     }) ?? null
   );
+}
+
+function extractTaskIdFromDescription(description: string): string | null {
+  const match = description.match(/Work\.ai Task ID:\s*([^\s]+)/i);
+  return match?.[1] ?? null;
 }
 
 function taskColorIndex(taskId: string): number {
@@ -369,6 +379,21 @@ function urgencyDotClass(index: number, score: number): string {
   return "bg-emerald-500";
 }
 
+function agedUrgencyScore(task: TaskAnalysis, nowMs: number): number {
+  const deadlineMs = new Date(task.deadline).getTime();
+  if (!Number.isFinite(deadlineMs)) return task.urgencyScore;
+  const hoursRemaining = (deadlineMs - nowMs) / (60 * 60 * 1000);
+  const proximityBoost = (() => {
+    if (hoursRemaining <= 0) return 35;
+    if (hoursRemaining <= 24) return 28;
+    if (hoursRemaining <= 48) return 22;
+    if (hoursRemaining <= 72) return 16;
+    if (hoursRemaining <= 168) return 8;
+    return 0;
+  })();
+  return Math.max(0, Math.min(100, task.urgencyScore + proximityBoost));
+}
+
 function effortMeterWidth(hours: number): number {
   return Math.max(6, Math.min(100, Math.round((hours / 10) * 100)));
 }
@@ -500,6 +525,10 @@ function isStringRecord(value: unknown): value is Record<string, string> {
   return Object.values(value).every((item) => typeof item === "string");
 }
 
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
 function isScheduledBlockArray(value: unknown): value is ScheduledBlock[] {
   if (!Array.isArray(value)) return false;
   return value.every((item) => {
@@ -569,6 +598,7 @@ function loadPersistedData(): PersistedData | null {
       syncedEventTaskMap?: unknown;
       calendarSnapshot?: unknown;
       googleCalendars?: unknown;
+      targetCalendarId?: unknown;
     };
 
     if (!isTaskInputArray(parsed.tasks)) return null;
@@ -581,6 +611,9 @@ function loadPersistedData(): PersistedData | null {
       ignoredCalendarIds: isStringArray(parsed.ignoredCalendarIds)
         ? parsed.ignoredCalendarIds
         : [],
+      targetCalendarId: isNullableString(parsed.targetCalendarId)
+        ? parsed.targetCalendarId
+        : null,
       schedule: isScheduledBlockArray(parsed.schedule) ? parsed.schedule : [],
       syncedEventTaskMap: isStringRecord(parsed.syncedEventTaskMap)
         ? parsed.syncedEventTaskMap
@@ -627,8 +660,7 @@ export default function Home() {
   const [googleCalendars, setGoogleCalendars] = useState<GoogleCalendarListItem[]>([]);
   const [googleCalendarsLoading, setGoogleCalendarsLoading] = useState(false);
   const [googleCalendarsError, setGoogleCalendarsError] = useState<string | null>(null);
-  const [workCalendarId, setWorkCalendarId] = useState<string | null>(null);
-  const [workCalendarLabel, setWorkCalendarLabel] = useState<string>("Primary");
+  const [targetCalendarId, setTargetCalendarId] = useState<string | null>(null);
   const [ignoredCalendarIds, setIgnoredCalendarIds] = useState<string[]>([]);
   const [calendarSnapshotError, setCalendarSnapshotError] = useState<string | null>(null);
   const [calendarSnapshotLabel, setCalendarSnapshotLabel] = useState<string | null>(null);
@@ -659,6 +691,8 @@ export default function Home() {
   const [photoUploadLoading, setPhotoUploadLoading] = useState(false);
   const [photoUploadError, setPhotoUploadError] = useState<string | null>(null);
   const [photoUploadMessage, setPhotoUploadMessage] = useState<string | null>(null);
+  const [radarNowMs, setRadarNowMs] = useState<number>(() => Date.now());
+  const [completingTaskIds, setCompletingTaskIds] = useState<string[]>([]);
   const celebrationTimer = useRef<number | null>(null);
   const autoReplanTimer = useRef<number | null>(null);
   const scheduleRequestInFlight = useRef(false);
@@ -668,6 +702,7 @@ export default function Home() {
   });
   const scheduleSignatureRef = useRef<string>("");
   const scheduleRef = useRef<ScheduledBlock[]>([]);
+  const syncedEventTaskMapRef = useRef<Record<string, string>>({});
   const schedulePrefsSignatureRef = useRef<string>("");
   const localHydratedRef = useRef(false);
   const cloudSyncTimer = useRef<number | null>(null);
@@ -678,8 +713,23 @@ export default function Home() {
   const pendingCalendarMatchesRef = useRef<PendingCalendarMatch[]>([]);
   const suppressNextAutoScheduleRefreshRef = useRef(false);
   const photoFileInputRef = useRef<HTMLInputElement | null>(null);
+  const taskCompletionTimersRef = useRef<number[]>([]);
 
   const analysis = useMemo(() => aiAnalysis ?? [], [aiAnalysis]);
+  const radarAnalysis = useMemo<RadarTask[]>(() => {
+    return analysis
+      .map((task) => ({
+        ...task,
+        agedUrgencyScore: agedUrgencyScore(task, radarNowMs),
+      }))
+      .sort((a, b) => {
+        if (a.agedUrgencyScore !== b.agedUrgencyScore) {
+          return b.agedUrgencyScore - a.agedUrgencyScore;
+        }
+        if (a.priorityScore !== b.priorityScore) return b.priorityScore - a.priorityScore;
+        return new Date(a.deadline).getTime() - new Date(b.deadline).getTime();
+      });
+  }, [analysis, radarNowMs]);
   const analyzedIds = useMemo(() => new Set(analysis.map((task) => task.id)), [analysis]);
   const pendingTasks = useMemo(
     () => tasks.filter((task) => !analyzedIds.has(task.id)),
@@ -727,6 +777,11 @@ export default function Home() {
     }
     return counts;
   }, [syncedEventTaskMap]);
+  const targetCalendarLabel = useMemo(() => {
+    if (!targetCalendarId) return "Primary";
+    const selected = googleCalendars.find((calendar) => calendar.id === targetCalendarId);
+    return selected ? selected.summary : "Primary";
+  }, [googleCalendars, targetCalendarId]);
 
   const totalHours = analysis.reduce((sum, task) => sum + task.estimatedHours, 0);
   const connectedCalendar = googleSession.connected;
@@ -847,6 +902,7 @@ export default function Home() {
       setAiAnalysis(persisted.aiAnalysis);
       setSchedulePreferences(persisted.schedulePreferences);
       setIgnoredCalendarIds(persisted.ignoredCalendarIds);
+      setTargetCalendarId(persisted.targetCalendarId);
       setSchedule(persisted.schedule);
       setSyncedEventTaskMap(persisted.syncedEventTaskMap);
       setCalendarSnapshot(persisted.calendarSnapshot);
@@ -859,7 +915,8 @@ export default function Home() {
         persisted.calendarSnapshot.length > 0 ||
         persisted.googleCalendars.length > 0 ||
         Object.keys(persisted.syncedEventTaskMap).length > 0 ||
-        persisted.ignoredCalendarIds.length > 0;
+        persisted.ignoredCalendarIds.length > 0 ||
+        persisted.targetCalendarId !== null;
     }
     localHydratedRef.current = true;
   }, []);
@@ -867,6 +924,10 @@ export default function Home() {
   useEffect(() => {
     scheduleRef.current = schedule;
   }, [schedule]);
+
+  useEffect(() => {
+    syncedEventTaskMapRef.current = syncedEventTaskMap;
+  }, [syncedEventTaskMap]);
 
   useEffect(() => {
     schedulePrefsSignatureRef.current = JSON.stringify(schedulePreferences);
@@ -879,6 +940,7 @@ export default function Home() {
       aiAnalysis,
       schedulePreferences,
       ignoredCalendarIds,
+      targetCalendarId,
       schedule,
       syncedEventTaskMap,
       calendarSnapshot,
@@ -889,6 +951,7 @@ export default function Home() {
     aiAnalysis,
     schedulePreferences,
     ignoredCalendarIds,
+    targetCalendarId,
     schedule,
     syncedEventTaskMap,
     calendarSnapshot,
@@ -918,6 +981,7 @@ export default function Home() {
                 aiAnalysis?: TaskAnalysis[] | null;
                 schedulePreferences?: unknown;
                 ignoredCalendarIds?: unknown;
+                targetCalendarId?: unknown;
                 schedule?: unknown;
                 syncedEventTaskMap?: unknown;
               }
@@ -959,6 +1023,13 @@ export default function Home() {
             isStringArray(data.state?.ignoredCalendarIds)
               ? data.state.ignoredCalendarIds
               : current,
+          );
+          setTargetCalendarId((current) =>
+            current !== null
+              ? current
+              : isNullableString(data.state?.targetCalendarId)
+                ? data.state.targetCalendarId
+                : current,
           );
           setSchedule((current) => {
             if (current.length > 0) return current;
@@ -1019,6 +1090,7 @@ export default function Home() {
             aiAnalysis,
             schedulePreferences,
             ignoredCalendarIds,
+            targetCalendarId,
             schedule,
             syncedEventTaskMap,
           }),
@@ -1063,6 +1135,7 @@ export default function Home() {
     aiAnalysis,
     schedulePreferences,
     ignoredCalendarIds,
+    targetCalendarId,
     schedule,
     syncedEventTaskMap,
     connectedCalendar,
@@ -1257,6 +1330,7 @@ export default function Home() {
         );
         const params = new URLSearchParams({
           days: String(lookaheadDays),
+          pastDays: "21",
           limit: "200",
         });
         if (ignoredCalendarIds.length > 0) {
@@ -1332,7 +1406,9 @@ export default function Home() {
             );
 
             if (!matchedEvent || claimedEventIds.has(matchedEvent.id)) {
-              unmatchedPending.push(pending);
+              if (!matchedEvent) {
+                unmatchedPending.push(pending);
+              }
               continue;
             }
 
@@ -1346,13 +1422,59 @@ export default function Home() {
 
           pendingCalendarMatchesRef.current = unmatchedPending;
         }
+        const backfilledFromHistory: Array<{ eventId: string; taskId: string; minutes: number }> = [];
+        const existingSyncedMap = syncedEventTaskMapRef.current;
+        const nowMsForBackfill = Date.now();
+        const claimedEventIds = new Set([
+          ...matchedFromSchedule.map((pair) => pair.eventId),
+          ...matchedFromPending.map((pair) => pair.eventId),
+        ]);
+        for (const event of data.events ?? []) {
+          if (claimedEventIds.has(event.id)) continue;
+          if (existingSyncedMap[event.id]) continue;
+          if (event.allDay) continue;
+          const taskId = extractTaskIdFromDescription(event.description);
+          if (!taskId) continue;
+          const startMs = new Date(event.startISO).getTime();
+          const endMs = new Date(event.endISO).getTime();
+          if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+          if (endMs > nowMsForBackfill) continue;
+          backfilledFromHistory.push({
+            eventId: event.id,
+            taskId,
+            minutes: Math.max(0, Math.round((endMs - startMs) / 60000)),
+          });
+        }
+        if (backfilledFromHistory.length > 0) {
+          const minutesByTask = new Map<string, number>();
+          for (const pair of backfilledFromHistory) {
+            minutesByTask.set(pair.taskId, (minutesByTask.get(pair.taskId) ?? 0) + pair.minutes);
+          }
+          suppressNextAutoScheduleRefreshRef.current = true;
+          setAiAnalysis((current) => {
+            if (!current) return current;
+            return current.map((task) => {
+              const backfilledMinutes = minutesByTask.get(task.id) ?? 0;
+              if (backfilledMinutes <= 0) return task;
+              const nextHours = Math.max(0, task.estimatedHours - backfilledMinutes / 60);
+              return {
+                ...task,
+                estimatedHours: Math.round(nextHours * 100) / 100,
+              };
+            });
+          });
+        }
         setSyncedEventTaskMap((current) => {
           const next: Record<string, string> = {};
           const visibleEventIds = new Set((data.events ?? []).map((event) => event.id));
           for (const [eventId, taskId] of Object.entries(current)) {
             if (visibleEventIds.has(eventId)) next[eventId] = taskId;
           }
-          for (const pair of [...matchedFromSchedule, ...matchedFromPending]) {
+          for (const pair of [
+            ...matchedFromSchedule,
+            ...matchedFromPending,
+            ...backfilledFromHistory,
+          ]) {
             next[pair.eventId] = pair.taskId;
           }
           return next;
@@ -1380,6 +1502,7 @@ export default function Home() {
       if (!authLoading) {
         setGoogleCalendars([]);
         setGoogleCalendarsError(null);
+        setTargetCalendarId(null);
       }
       setGoogleCalendarsLoading(false);
       return;
@@ -1400,6 +1523,9 @@ export default function Home() {
       setGoogleCalendars(data.calendars);
       const validIds = new Set(data.calendars.map((calendar) => calendar.id));
       setIgnoredCalendarIds((current) => current.filter((id) => validIds.has(id)));
+      const fallbackId =
+        data.calendars.find((calendar) => calendar.primary)?.id ?? data.calendars[0]?.id ?? null;
+      setTargetCalendarId((current) => (current && validIds.has(current) ? current : fallbackId));
       setGoogleCalendarsError(null);
     } catch (error) {
       setGoogleCalendarsError(
@@ -1409,36 +1535,6 @@ export default function Home() {
       setGoogleCalendarsLoading(false);
     }
   }, [connectedCalendar, authLoading]);
-
-  const ensureWorkCalendar = useCallback(async () => {
-    if (!connectedCalendar) {
-      setWorkCalendarId(null);
-      setWorkCalendarLabel("Primary");
-      return;
-    }
-
-    try {
-      const response = await fetch("/api/google/work-calendar", {
-        method: "POST",
-      });
-      const data = (await response.json()) as {
-        calendarId?: string;
-        created?: boolean;
-      };
-
-      if (!response.ok || !data.calendarId) {
-        setWorkCalendarId(null);
-        setWorkCalendarLabel("Primary");
-        return;
-      }
-
-      setWorkCalendarId(data.calendarId);
-      setWorkCalendarLabel("Work.ai");
-    } catch {
-      setWorkCalendarId(null);
-      setWorkCalendarLabel("Primary");
-    }
-  }, [connectedCalendar]);
 
   const markBlockAdded = useCallback((block: ScheduledBlock) => {
     const alreadyQueued = pendingCalendarMatchesRef.current.some(
@@ -1469,10 +1565,11 @@ export default function Home() {
         const response = await fetch("/api/google/events/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ block }),
+          body: JSON.stringify({ block, calendarId: targetCalendarId ?? "primary" }),
         });
         const data = (await response.json()) as {
           ok?: boolean;
+          eventId?: string;
           error?: string;
           details?: string;
         };
@@ -1480,6 +1577,32 @@ export default function Home() {
           throw new Error(data.error || "Could not add event to Google Calendar");
         }
 
+        setSchedule((current) => {
+          const blockKey = scheduleBlockKey(block);
+          const next = current.filter((item) => scheduleBlockKey(item) !== blockKey);
+          if (next.length !== current.length) {
+            scheduleSignatureRef.current = scheduleSignature(next);
+          }
+          return next;
+        });
+        suppressNextAutoScheduleRefreshRef.current = true;
+        setAiAnalysis((current) => {
+          if (!current) return current;
+          return current.map((task) => {
+            if (task.id !== block.taskId) return task;
+            const nextHours = Math.max(0, task.estimatedHours - block.minutes / 60);
+            return {
+              ...task,
+              estimatedHours: Math.round(nextHours * 100) / 100,
+            };
+          });
+        });
+        if (data.eventId) {
+          setSyncedEventTaskMap((current) => ({
+            ...current,
+            [data.eventId as string]: block.taskId,
+          }));
+        }
         markBlockAdded(block);
         void refreshCalendarSnapshot({ silent: false });
         for (const timerId of calendarSnapshotRefreshAfterAddTimers.current) {
@@ -1505,7 +1628,7 @@ export default function Home() {
         setAddCalendarBlockKey(null);
       }
     },
-    [markBlockAdded, onboardingStep, refreshCalendarSnapshot, showOnboarding],
+    [markBlockAdded, onboardingStep, refreshCalendarSnapshot, showOnboarding, targetCalendarId],
   );
 
   useEffect(() => {
@@ -1530,16 +1653,22 @@ export default function Home() {
   }, [analysis]);
 
   useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setRadarNowMs(Date.now());
+    }, 60 * 60 * 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(() => {
     refreshCalendarSnapshot({ silent: false });
   }, [refreshCalendarSnapshot]);
 
   useEffect(() => {
     refreshGoogleCalendars();
   }, [refreshGoogleCalendars]);
-
-  useEffect(() => {
-    ensureWorkCalendar();
-  }, [ensureWorkCalendar]);
 
   useEffect(() => {
     if (!connectedCalendar) {
@@ -1580,6 +1709,10 @@ export default function Home() {
         window.clearTimeout(timerId);
       }
       calendarSnapshotRefreshAfterAddTimers.current = [];
+      for (const timerId of taskCompletionTimersRef.current) {
+        window.clearTimeout(timerId);
+      }
+      taskCompletionTimersRef.current = [];
     };
   }, []);
 
@@ -1786,6 +1919,41 @@ export default function Home() {
     }
   }
 
+  function finalizeTaskCompletion(taskId: string) {
+    setTasks((current) => current.filter((task) => task.id !== taskId));
+    setAiAnalysis((current) => (current ? current.filter((task) => task.id !== taskId) : current));
+    setSchedule((current) => {
+      const next = current.filter((block) => block.taskId !== taskId);
+      if (next.length !== current.length) {
+        scheduleSignatureRef.current = scheduleSignature(next);
+      }
+      return next;
+    });
+    setSyncedEventTaskMap((current) => {
+      const next: Record<string, string> = {};
+      for (const [eventId, mappedTaskId] of Object.entries(current)) {
+        if (mappedTaskId !== taskId) next[eventId] = mappedTaskId;
+      }
+      return next;
+    });
+    pendingCalendarMatchesRef.current = pendingCalendarMatchesRef.current.filter(
+      (pending) => pending.taskId !== taskId,
+    );
+    if (overrideTaskId === taskId) {
+      cancelOverrideEditor();
+    }
+  }
+
+  function markAnalyzedTaskComplete(taskId: string) {
+    if (completingTaskIds.includes(taskId)) return;
+    setCompletingTaskIds((current) => [...current, taskId]);
+    const timerId = window.setTimeout(() => {
+      finalizeTaskCompletion(taskId);
+      setCompletingTaskIds((current) => current.filter((id) => id !== taskId));
+    }, 680);
+    taskCompletionTimersRef.current.push(timerId);
+  }
+
   function exitSampleMode() {
     setSampleModeActive(false);
     setTasks([]);
@@ -1950,11 +2118,11 @@ export default function Home() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(14,165,233,0.2),transparent_40%),radial-gradient(circle_at_80%_0%,rgba(250,204,21,0.2),transparent_35%),linear-gradient(180deg,#f8fafc_0%,#e2e8f0_100%)] dark:bg-[radial-gradient(circle_at_20%_20%,rgba(56,189,248,0.2),transparent_38%),radial-gradient(circle_at_80%_0%,rgba(251,191,36,0.1),transparent_30%),linear-gradient(180deg,#020617_0%,#0f172a_100%)] pink:bg-[radial-gradient(circle_at_18%_20%,rgba(244,114,182,0.24),transparent_40%),radial-gradient(circle_at_85%_5%,rgba(217,70,239,0.22),transparent_35%),linear-gradient(180deg,#fff1f7_0%,#ffe4ef_100%)]" />
       <main className="relative mx-auto flex w-full max-w-7xl flex-col gap-6">
         <section className="fun-enter rounded-2xl border border-slate-300/60 bg-white/75 p-6 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-950/70 pink:border-fuchsia-200 pink:bg-pink-50/80 md:p-8">
-          <div className="flex items-start justify-between gap-3">
-            <Link href="/" aria-label="Go to homepage">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <Link href="/" aria-label="Go to homepage" className="min-w-0">
               <WorkAiLogo />
             </Link>
-            <div className="flex items-center gap-2 rounded-full border border-slate-300/80 bg-white/80 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/70 pink:border-fuchsia-200 pink:bg-pink-100/80">
+            <div className="shrink-0 flex items-center gap-2 rounded-full border border-slate-300/80 bg-white/80 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/70 pink:border-fuchsia-200 pink:bg-pink-100/80">
               <button
                 type="button"
                 aria-label="Use light theme"
@@ -2164,8 +2332,31 @@ export default function Home() {
             </p>
             {connectedCalendar && (
               <p className="mt-1 text-xs text-slate-500 dark:text-slate-400 pink:text-fuchsia-700/80">
-                Add target calendar: {workCalendarLabel}
+                Add target calendar: {targetCalendarLabel}
               </p>
+            )}
+            {connectedCalendar && (
+              <div className="mt-2">
+                <label className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400 pink:text-fuchsia-700">
+                  Destination Calendar
+                </label>
+                <select
+                  value={targetCalendarId ?? ""}
+                  disabled={googleCalendarsLoading || googleCalendars.length === 0}
+                  onChange={(event) => setTargetCalendarId(event.target.value || null)}
+                  className="mt-1 h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/40 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 pink:border-fuchsia-200 pink:bg-white pink:text-fuchsia-950 pink:focus-visible:ring-fuchsia-400/50"
+                >
+                  {googleCalendars.length === 0 && (
+                    <option value="">No calendars available</option>
+                  )}
+                  {googleCalendars.map((calendar) => (
+                    <option key={calendar.id} value={calendar.id}>
+                      {calendar.summary}
+                      {calendar.primary ? " (Primary)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
             )}
             {connectedCalendar && (
               <div className="mt-3 rounded-lg border border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/60 pink:border-fuchsia-200 pink:bg-pink-50/80">
@@ -2413,6 +2604,9 @@ export default function Home() {
             <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
               AI scores urgency, predicts effort, and builds a doable schedule.
             </p>
+            <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400 pink:text-fuchsia-700/80">
+              Priority Radar urgency auto-refreshes every hour.
+            </p>
             {aiError && (
               <p className="mt-2 rounded-md bg-rose-100 px-3 py-2 text-xs font-medium text-rose-700">
                 {aiError}
@@ -2428,11 +2622,37 @@ export default function Home() {
                   subtitle="Hit 'Plan My Week' to turn tasks into priority and effort scores."
                 />
               )}
-              {analysis.map((task) => (
+              {radarAnalysis.map((task) => (
                 <div
                   key={task.id}
-                  className="fun-enter rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900"
+                  className={`fun-enter relative overflow-hidden rounded-lg border border-slate-200 bg-white p-3 transition-all duration-700 dark:border-slate-700 dark:bg-slate-900 ${
+                    completingTaskIds.includes(task.id)
+                      ? "pointer-events-none translate-x-5 opacity-0"
+                      : ""
+                  }`}
                 >
+                  {completingTaskIds.includes(task.id) && (
+                    <div className="task-confetti pointer-events-none absolute inset-0 overflow-hidden">
+                      {Array.from({ length: 14 }).map((_, index) => (
+                        <span
+                          key={`${task.id}-confetti-${index}`}
+                          className="task-confetti-piece absolute top-2 h-1.5 w-1.5 rounded-sm"
+                          style={{
+                            left: `${8 + index * 6}%`,
+                            animationDelay: `${index * 28}ms`,
+                            backgroundColor:
+                              index % 4 === 0
+                                ? "#0ea5e9"
+                                : index % 4 === 1
+                                  ? "#22c55e"
+                                  : index % 4 === 2
+                                    ? "#f59e0b"
+                                    : "#ec4899",
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <p className="font-semibold text-slate-900 dark:text-slate-100">{task.title}</p>
                     <div className="flex flex-wrap items-center gap-1.5">
@@ -2474,7 +2694,7 @@ export default function Home() {
                         {Array.from({ length: 5 }).map((_, index) => (
                           <span
                             key={`${task.id}-urgency-${index}`}
-                            className={`h-2.5 w-2.5 rounded-full ${urgencyDotClass(index, task.urgencyScore)}`}
+                            className={`h-2.5 w-2.5 rounded-full ${urgencyDotClass(index, task.agedUrgencyScore)}`}
                           />
                         ))}
                       </div>
@@ -2550,6 +2770,7 @@ export default function Home() {
                       type="button"
                       variant="outline"
                       className="h-8 px-2 text-xs"
+                      disabled={completingTaskIds.includes(task.id)}
                       onClick={() =>
                         overrideTaskId === task.id ? cancelOverrideEditor() : openOverrideEditor(task)
                       }
@@ -2558,8 +2779,17 @@ export default function Home() {
                     </Button>
                     <Button
                       type="button"
+                      className="h-8 px-2 text-xs"
+                      disabled={completingTaskIds.includes(task.id)}
+                      onClick={() => markAnalyzedTaskComplete(task.id)}
+                    >
+                      {completingTaskIds.includes(task.id) ? "Completing..." : "Mark Complete"}
+                    </Button>
+                    <Button
+                      type="button"
                       variant="ghost"
                       className="h-8 px-2 text-xs"
+                      disabled={completingTaskIds.includes(task.id)}
                       onClick={() => removeTask(task.id)}
                     >
                       Remove
@@ -2607,7 +2837,7 @@ export default function Home() {
                       return (
                         <div
                           key={day.value}
-                          className="grid grid-cols-[2.5rem_1fr_1fr_auto] items-center gap-2 rounded-md border border-slate-200 bg-white/70 p-2 dark:border-slate-700 dark:bg-slate-950/40 pink:border-fuchsia-200 pink:bg-white/80"
+                          className="grid grid-cols-1 gap-2 rounded-md border border-slate-200 bg-white/70 p-2 sm:grid-cols-[2.5rem_1fr_1fr_auto] sm:items-center dark:border-slate-700 dark:bg-slate-950/40 pink:border-fuchsia-200 pink:bg-white/80"
                         >
                           <button
                             type="button"
@@ -2647,7 +2877,7 @@ export default function Home() {
                           <Button
                             type="button"
                             variant="ghost"
-                            className="h-8 px-2 text-[10px]"
+                            className="h-8 w-full px-2 text-[10px] sm:w-auto"
                             onClick={() => applyDayWindowToAll(day.value)}
                           >
                             Apply all
@@ -2822,7 +3052,7 @@ export default function Home() {
         </section>
 
         {showOnboarding && (
-          <div className="fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-40 w-[min(92vw,380px)] max-h-[min(52vh,420px)] overflow-y-auto rounded-2xl border border-slate-300/70 bg-white/95 p-4 shadow-2xl backdrop-blur dark:border-slate-700 dark:bg-slate-950/95 pink:border-fuchsia-200 pink:bg-pink-50/95 md:bottom-5">
+          <div className="fixed inset-x-4 bottom-[max(1rem,env(safe-area-inset-bottom))] z-40 mx-auto w-auto max-w-[380px] max-h-[min(52vh,420px)] overflow-y-auto rounded-2xl border border-slate-300/70 bg-white/95 p-4 shadow-2xl backdrop-blur dark:border-slate-700 dark:bg-slate-950/95 pink:border-fuchsia-200 pink:bg-pink-50/95 md:bottom-5 md:left-auto md:right-4 md:mx-0">
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-sky-600 dark:text-sky-300 pink:text-fuchsia-700">
               Guided Setup {onboardingStep + 1}/{ONBOARDING_STEPS.length}
             </p>

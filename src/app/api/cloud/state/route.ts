@@ -57,6 +57,10 @@ function isStringRecord(value: unknown): value is Record<string, string> {
   return Object.values(value).every((item) => typeof item === "string");
 }
 
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
 function isScheduledBlockArray(value: unknown): value is ScheduledBlock[] {
   if (!Array.isArray(value)) return false;
   return value.every((item) => {
@@ -128,6 +132,7 @@ export async function PUT(request: NextRequest) {
     aiAnalysis?: unknown;
     schedulePreferences?: unknown;
     ignoredCalendarIds?: unknown;
+    targetCalendarId?: unknown;
     schedule?: unknown;
     syncedEventTaskMap?: unknown;
   };
@@ -141,6 +146,9 @@ export async function PUT(request: NextRequest) {
   }
   if (body.ignoredCalendarIds !== undefined && !isStringArray(body.ignoredCalendarIds)) {
     return NextResponse.json({ error: "Invalid ignoredCalendarIds payload" }, { status: 400 });
+  }
+  if (body.targetCalendarId !== undefined && !isNullableString(body.targetCalendarId)) {
+    return NextResponse.json({ error: "Invalid targetCalendarId payload" }, { status: 400 });
   }
   if (body.schedule !== undefined && !isScheduledBlockArray(body.schedule)) {
     return NextResponse.json({ error: "Invalid schedule payload" }, { status: 400 });
@@ -157,6 +165,10 @@ export async function PUT(request: NextRequest) {
       aiAnalysis: (body.aiAnalysis as TaskAnalysis[] | null) ?? null,
       schedulePreferences,
       ignoredCalendarIds: (body.ignoredCalendarIds as string[] | undefined) ?? [],
+      targetCalendarId:
+        body.targetCalendarId === undefined
+          ? null
+          : (body.targetCalendarId as string | null),
       schedule: (body.schedule as ScheduledBlock[] | undefined) ?? [],
       syncedEventTaskMap:
         (body.syncedEventTaskMap as Record<string, string> | undefined) ?? {},

@@ -62,6 +62,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const days = Math.max(1, Math.min(60, Number(searchParams.get("days") ?? 14)));
+  const pastDays = Math.max(0, Math.min(30, Number(searchParams.get("pastDays") ?? 0)));
   const limit = Math.max(5, Math.min(500, Number(searchParams.get("limit") ?? 200)));
   const ignoredCalendarIds = new Set(
     (searchParams.get("ignoredCalendarIds") ?? "")
@@ -71,6 +72,9 @@ export async function GET(request: NextRequest) {
   );
 
   const timeMin = new Date();
+  if (pastDays > 0) {
+    timeMin.setDate(timeMin.getDate() - pastDays);
+  }
   const timeMax = new Date();
   timeMax.setDate(timeMax.getDate() + days);
 

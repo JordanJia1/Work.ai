@@ -9,15 +9,9 @@ type GoogleCalendarListResponse = {
   }>;
 };
 
-type GoogleCalendarCreateResponse = {
-  id?: string;
-};
-
 type GoogleEventCreateResponse = {
   id?: string;
 };
-
-const WORK_CALENDAR_NAME = "Work.ai";
 
 function isScheduledBlock(value: unknown): value is ScheduledBlock {
   if (!value || typeof value !== "object") return false;
@@ -44,31 +38,6 @@ async function fetchCalendarList(accessToken: string): Promise<GoogleCalendarLis
   );
   if (!response.ok) return null;
   return (await response.json()) as GoogleCalendarListResponse;
-}
-
-async function resolveOrCreateWorkCalendarId(accessToken: string): Promise<string | null> {
-  const existing = await fetchCalendarList(accessToken);
-  const existingId = (existing?.items ?? []).find(
-    (item) => item.id && item.summary?.trim().toLowerCase() === WORK_CALENDAR_NAME.toLowerCase(),
-  )?.id;
-  if (existingId) return existingId;
-
-  const createResponse = await fetch("https://www.googleapis.com/calendar/v3/calendars", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      summary: WORK_CALENDAR_NAME,
-      description: "Work.ai scheduled focus blocks",
-      timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || "Etc/UTC",
-    }),
-    cache: "no-store",
-  });
-  if (!createResponse.ok) return null;
-  const created = (await createResponse.json()) as GoogleCalendarCreateResponse;
-  return created.id ?? null;
 }
 
 async function createEvent(
@@ -107,28 +76,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Google Calendar not connected" }, { status: 401 });
   }
 
-  const body = (await request.json()) as { block?: unknown };
+  const body = (await request.json()) as { block?: unknown; calendarId?: unknown };
   if (!isScheduledBlock(body.block)) {
     return NextResponse.json({ error: "Invalid block payload" }, { status: 400 });
   }
+  if (body.calendarId !== undefined && body.calendarId !== null && typeof body.calendarId !== "string") {
+    return NextResponse.json({ error: "Invalid calendarId payload" }, { status: 400 });
+  }
   const block = body.block;
+  const requestedCalendarId = body.calendarId?.trim() || "primary";
 
-  const workCalendarId = await resolveOrCreateWorkCalendarId(accessToken);
-  const targetCalendarId = workCalendarId ?? "primary";
-
-  let result = await createEvent(accessToken, targetCalendarId, block);
-  if (!result.ok && targetCalendarId !== "primary") {
-    // Graceful fallback when dedicated calendar creation/use is unavailable.
-    result = await createEvent(accessToken, "primary", block);
-    if (result.ok) {
-      return NextResponse.json({
-        ok: true,
-        eventId: result.eventId,
-        calendarId: "primary",
-        fallback: true,
-      });
+  let targetCalendarId = requestedCalendarId;
+  if (targetCalendarId !== "primary") {
+    const calendarList = await fetchCalendarList(accessToken);
+    const validCalendarIds = new Set((calendarList?.items ?? []).map((item) => item.id).filter(Boolean));
+    if (!validCalendarIds.has(targetCalendarId)) {
+      return NextResponse.json(
+        { error: "Selected calendar is unavailable. Refresh calendars and try again." },
+        { status: 400 },
+      );
     }
   }
+
+  const result = await createEvent(accessToken, targetCalendarId, block);
 
   if (!result.ok) {
     return NextResponse.json(
@@ -144,7 +114,5 @@ export async function POST(request: NextRequest) {
     ok: true,
     eventId: result.eventId,
     calendarId: targetCalendarId,
-    fallback: false,
   });
 }
-

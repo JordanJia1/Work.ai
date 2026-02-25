@@ -7,6 +7,7 @@ type CloudPayload = {
   aiAnalysis: TaskAnalysis[] | null;
   schedulePreferences?: SchedulePreferences;
   ignoredCalendarIds?: string[];
+  targetCalendarId?: string | null;
   schedule?: ScheduledBlock[];
   syncedEventTaskMap?: Record<string, string>;
 };

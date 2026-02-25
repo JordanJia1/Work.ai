@@ -105,9 +105,9 @@ export default function LandingPage() {
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(14,165,233,0.2),transparent_40%),radial-gradient(circle_at_80%_0%,rgba(250,204,21,0.2),transparent_35%),linear-gradient(180deg,#f8fafc_0%,#e2e8f0_100%)] dark:bg-[radial-gradient(circle_at_20%_20%,rgba(56,189,248,0.2),transparent_38%),radial-gradient(circle_at_80%_0%,rgba(251,191,36,0.1),transparent_30%),linear-gradient(180deg,#020617_0%,#0f172a_100%)] pink:bg-[radial-gradient(circle_at_18%_20%,rgba(244,114,182,0.24),transparent_40%),radial-gradient(circle_at_85%_5%,rgba(217,70,239,0.22),transparent_35%),linear-gradient(180deg,#fff1f7_0%,#ffe4ef_100%)]" />
       <main className="relative mx-auto flex min-h-[85vh] w-full max-w-5xl flex-col justify-center gap-8">
         <section className="rounded-2xl border border-slate-300/60 bg-white/75 p-6 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-950/70 pink:border-fuchsia-200 pink:bg-pink-50/80 md:p-10">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
             <WorkAiLogo />
-            <div className="flex items-center gap-2 rounded-full border border-slate-300/80 bg-white/80 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/70 pink:border-fuchsia-200 pink:bg-pink-100/80">
+            <div className="shrink-0 flex items-center gap-2 rounded-full border border-slate-300/80 bg-white/80 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/70 pink:border-fuchsia-200 pink:bg-pink-100/80">
               <button
                 type="button"
                 aria-label="Use light theme"

@@ -46,6 +46,10 @@
   .empty-float {
     animation: empty-float 3.2s ease-in-out infinite;
   }
+
+  .task-confetti-piece {
+    animation: task-confetti-burst 700ms cubic-bezier(0.2, 0.85, 0.2, 1) forwards;
+  }
 }
 
 @keyframes fun-enter {
@@ -87,6 +91,20 @@
   50% {
     transform: translateY(-8px) scale(1.01);
     box-shadow: 0 18px 30px -16px rgba(15, 23, 42, 0.34);
+  }
+}
+
+@keyframes task-confetti-burst {
+  0% {
+    opacity: 0;
+    transform: translateY(0) rotate(0deg) scale(0.8);
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(52px) rotate(280deg) scale(1);
   }
 }
 
