@@ -671,7 +671,6 @@ export default function Home() {
   const hasLocalStateRef = useRef(false);
   const calendarSnapshotPollTimer = useRef<number | null>(null);
   const calendarSnapshotRefreshAfterAddTimers = useRef<number[]>([]);
-  const committedBlockKeysRef = useRef<Set<string>>(new Set());
   const pendingCalendarMatchesRef = useRef<PendingCalendarMatch[]>([]);
   const suppressNextAutoScheduleRefreshRef = useRef(false);
   const photoFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1370,36 +1369,21 @@ export default function Home() {
   }, [connectedCalendar, authLoading]);
 
   const markBlockAdded = useCallback((block: ScheduledBlock) => {
-    const key = scheduleBlockKey(block);
-    if (committedBlockKeysRef.current.has(key)) return;
-    committedBlockKeysRef.current.add(key);
-    suppressNextAutoScheduleRefreshRef.current = true;
+    const alreadyQueued = pendingCalendarMatchesRef.current.some(
+      (pending) =>
+        pending.taskId === block.taskId &&
+        pending.startISO === block.startISO &&
+        pending.endISO === block.endISO &&
+        pending.minutes === block.minutes,
+    );
+    if (alreadyQueued) return;
+
     pendingCalendarMatchesRef.current.push({
       taskId: block.taskId,
       taskTitle: block.taskTitle,
       startISO: block.startISO,
       endISO: block.endISO,
       minutes: block.minutes,
-    });
-
-    setSchedule((current) => {
-      const next = current.filter((candidate) => scheduleBlockKey(candidate) !== key);
-      if (next.length !== current.length) {
-        scheduleSignatureRef.current = scheduleSignature(next);
-      }
-      return next;
-    });
-
-    setAiAnalysis((current) => {
-      if (!current) return current;
-      return current.map((task) => {
-        if (task.id !== block.taskId) return task;
-        const nextHours = Math.max(0, task.estimatedHours - block.minutes / 60);
-        return {
-          ...task,
-          estimatedHours: Math.round(nextHours * 100) / 100,
-        };
-      });
     });
   }, []);
 
