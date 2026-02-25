@@ -1776,8 +1776,6 @@ export default function Home() {
   function updateWellnessPreference(
     key:
       | "maxWorkMinutesPerDay"
-      | "breakEveryFocusMinutes"
-      | "shortBreakMinutes"
       | "maxContinuousFocusMinutes",
     value: number,
   ) {
@@ -2550,40 +2548,6 @@ export default function Home() {
                             updateWellnessPreference(
                               "maxContinuousFocusMinutes",
                               Number(event.target.value || 120),
-                            )
-                          }
-                          className="mt-1 h-8"
-                        />
-                      </label>
-                      <label className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 pink:text-fuchsia-800">
-                        Break every (min)
-                        <Input
-                          type="number"
-                          min={30}
-                          max={360}
-                          step={10}
-                          value={schedulePreferences.breakEveryFocusMinutes}
-                          onChange={(event) =>
-                            updateWellnessPreference(
-                              "breakEveryFocusMinutes",
-                              Number(event.target.value || 90),
-                            )
-                          }
-                          className="mt-1 h-8"
-                        />
-                      </label>
-                      <label className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 pink:text-fuchsia-800">
-                        Break length (min)
-                        <Input
-                          type="number"
-                          min={5}
-                          max={60}
-                          step={5}
-                          value={schedulePreferences.shortBreakMinutes}
-                          onChange={(event) =>
-                            updateWellnessPreference(
-                              "shortBreakMinutes",
-                              Number(event.target.value || 10),
                             )
                           }
                           className="mt-1 h-8"

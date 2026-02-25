@@ -13,6 +13,7 @@ const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 type ExtractedTask = {
   title?: string;
   details?: string;
+  rawText?: string;
   deadline?: string | null;
 };
 
@@ -58,7 +59,7 @@ export async function POST(request: NextRequest) {
 
   const systemPrompt =
     "You extract task details from images of assignments, notes, screenshots, and to-do lists. Return strict JSON only.";
-  const userPrompt = `Today is ${now}. Extract tasks from this image and structure them for task intake.\n\nRules:\n- title: short and actionable\n- details: useful context from the image (optional, max 300 chars)\n- deadline: return datetime-local format YYYY-MM-DDTHH:MM when clearly present, otherwise null\n- If multiple tasks are visible, return all clear actionable tasks.\n- If no task is visible, return an empty list.\n\nReturn only JSON in this shape:\n{\"tasks\":[{\"title\":\"...\",\"details\":\"...\",\"deadline\":null}]}`;
+  const userPrompt = `Today is ${now}. Extract tasks from this image and structure them for task intake.\n\nRules:\n- title: short and actionable.\n- details: include all important task description context, not a tiny summary.\n- Preserve specifics when visible: requirements, steps, constraints, materials, rubric points, page/word limits, dates, times, location, and special instructions.\n- Keep details concise but complete (prefer 1-5 sentences; do not omit key instructions).\n- rawText: include relevant verbatim excerpt(s) from the image for this task when available.\n- deadline: return datetime-local format YYYY-MM-DDTHH:MM when clearly present, otherwise null.\n- If multiple tasks are visible, return all clear actionable tasks.\n- If no task is visible, return an empty list.\n\nReturn only JSON in this shape:\n{\"tasks\":[{\"title\":\"...\",\"details\":\"...\",\"rawText\":\"...\",\"deadline\":null}]}`;
 
   const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -107,7 +108,7 @@ export async function POST(request: NextRequest) {
     const tasks = rawTasks
       .map((task) => ({
         title: task.title?.trim() ?? "",
-        details: task.details?.trim() ?? "",
+        details: (task.details?.trim() || task.rawText?.trim() || "").slice(0, 1200),
         deadline: typeof task.deadline === "string" ? task.deadline : null,
       }))
       .filter((task) => task.title.length > 0);

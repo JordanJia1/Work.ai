@@ -41,8 +41,6 @@ export type DaySchedulePreference = {
 export type SchedulePreferences = {
   dayRules: DaySchedulePreference[];
   maxWorkMinutesPerDay: number;
-  breakEveryFocusMinutes: number;
-  shortBreakMinutes: number;
   maxContinuousFocusMinutes: number;
 };
 
@@ -54,8 +52,6 @@ export const DEFAULT_SCHEDULE_PREFERENCES: SchedulePreferences = {
     endHour: 23,
   })),
   maxWorkMinutesPerDay: 8 * 60,
-  breakEveryFocusMinutes: 90,
-  shortBreakMinutes: 10,
   maxContinuousFocusMinutes: 120,
 };
 
@@ -71,8 +67,6 @@ export function normalizeSchedulePreferences(
     endHour?: unknown;
     activeWeekdays?: unknown;
     maxWorkMinutesPerDay?: unknown;
-    breakEveryFocusMinutes?: unknown;
-    shortBreakMinutes?: unknown;
     maxContinuousFocusMinutes?: unknown;
   };
 
@@ -146,18 +140,6 @@ export function normalizeSchedulePreferences(
       : fallback.maxWorkMinutesPerDay;
   const maxWorkMinutesPerDay = Math.max(60, Math.min(16 * 60, maxWorkMinutesPerDayRaw));
 
-  const breakEveryFocusMinutesRaw =
-    typeof raw.breakEveryFocusMinutes === "number"
-      ? Math.round(raw.breakEveryFocusMinutes)
-      : fallback.breakEveryFocusMinutes;
-  const breakEveryFocusMinutes = Math.max(30, Math.min(6 * 60, breakEveryFocusMinutesRaw));
-
-  const shortBreakMinutesRaw =
-    typeof raw.shortBreakMinutes === "number"
-      ? Math.round(raw.shortBreakMinutes)
-      : fallback.shortBreakMinutes;
-  const shortBreakMinutes = Math.max(5, Math.min(60, shortBreakMinutesRaw));
-
   const maxContinuousFocusMinutesRaw =
     typeof raw.maxContinuousFocusMinutes === "number"
       ? Math.round(raw.maxContinuousFocusMinutes)
@@ -170,8 +152,6 @@ export function normalizeSchedulePreferences(
   return {
     dayRules: hasAnyEnabled ? dayRules : fallback.dayRules,
     maxWorkMinutesPerDay,
-    breakEveryFocusMinutes,
-    shortBreakMinutes,
     maxContinuousFocusMinutes,
   };
 }
@@ -226,12 +206,6 @@ function blockOverlapsBusy(block: ScheduledBlock, busyIntervals: BusyInterval[])
   const end = new Date(block.endISO);
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return false;
   return isOverlappingBusyWindow(start, end, busyIntervals);
-}
-
-function formatLocalDateToISO(date: Date): string {
-  const timezoneOffset = date.getTimezoneOffset() * 60000;
-  const localTime = new Date(date.getTime() - timezoneOffset);
-  return localTime.toISOString().slice(0, 19);
 }
 
 function nextCalendarDays(start: Date, count: number): Date[] {
@@ -422,8 +396,8 @@ export function generateWeeklySchedule(
     blocks.push({
       taskId: task.id,
       taskTitle: task.title,
-      startISO: formatLocalDateToISO(start),
-      endISO: formatLocalDateToISO(end),
+      startISO: start.toISOString(),
+      endISO: end.toISOString(),
       minutes,
       calendarDescription: `${task.details}\nPriority: ${task.priorityLabel} (${task.priorityScore}/100)\nEstimated effort: ${task.estimatedHours}h\nDeadline: ${task.deadline}\nWork.ai Task ID: ${task.id}`,
     });
@@ -447,7 +421,6 @@ export function generateWeeklySchedule(
       ? maxDate(schedulingStart, dayStart)
       : dayStart;
     let workedMinutesToday = 0;
-    let focusMinutesSinceBreak = 0;
 
     for (
       let start = new Date(firstSlotStart);
@@ -462,20 +435,6 @@ export function generateWeeklySchedule(
         continue;
       }
       if (isOverlappingBusyWindow(start, end, plannedBusyIntervals)) {
-        focusMinutesSinceBreak = 0;
-        continue;
-      }
-      const breakTriggerMinutes = Math.min(
-        preferences.breakEveryFocusMinutes,
-        preferences.maxContinuousFocusMinutes,
-      );
-      if (focusMinutesSinceBreak >= breakTriggerMinutes) {
-        const breakEnd = addMinutes(start, Math.min(slotMinutes, preferences.shortBreakMinutes));
-        plannedBusyIntervals.push({
-          startISO: start.toISOString(),
-          endISO: breakEnd.toISOString(),
-        });
-        focusMinutesSinceBreak = 0;
         continue;
       }
 
@@ -536,14 +495,12 @@ export function generateWeeklySchedule(
         pushBlock(chosen, start, chosen.totalRoundedMinutes);
         chosen.remainingMinutes = 0;
         workedMinutesToday += chosen.totalRoundedMinutes;
-        focusMinutesSinceBreak += chosen.totalRoundedMinutes;
         continue;
       }
 
       pushBlock(chosen, start, slotMinutes);
       chosen.remainingMinutes -= slotMinutes;
       workedMinutesToday += slotMinutes;
-      focusMinutesSinceBreak += slotMinutes;
     }
   }
 
