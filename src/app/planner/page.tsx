@@ -86,6 +86,7 @@ type TimelineDay = {
 
 const STORAGE_KEY = "workflow_planner_v1";
 const ONBOARDING_KEY = "work_ai_onboarded_v1";
+const SETUP_PROMPT_KEY = "work_ai_setup_prompt_seen_v1";
 const WEEKDAY_OPTIONS = [
   { value: 0, label: "Sun" },
   { value: 1, label: "Mon" },
@@ -615,6 +616,7 @@ export default function Home() {
   const [showCelebration, setShowCelebration] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
+  const [showInitialSetupPrompt, setShowInitialSetupPrompt] = useState(false);
   const [sampleModeActive, setSampleModeActive] = useState(false);
   const [guidedCalendarClicked, setGuidedCalendarClicked] = useState(false);
   const [showTimePreferences, setShowTimePreferences] = useState(false);
@@ -641,6 +643,7 @@ export default function Home() {
   const calendarSnapshotRefreshAfterAddTimers = useRef<number[]>([]);
   const committedBlockKeysRef = useRef<Set<string>>(new Set());
   const pendingCalendarMatchesRef = useRef<PendingCalendarMatch[]>([]);
+  const suppressNextAutoScheduleRefreshRef = useRef(false);
 
   const analysis = useMemo(() => aiAnalysis ?? [], [aiAnalysis]);
   const analyzedIds = useMemo(() => new Set(analysis.map((task) => task.id)), [analysis]);
@@ -653,6 +656,12 @@ export default function Home() {
     () => buildCalendarWeekView(calendarSnapshot),
     [calendarSnapshot],
   );
+  const unscheduledAnalyzedTasks = useMemo(() => {
+    const scheduledTaskIds = new Set(schedule.map((block) => block.taskId));
+    return analysis.filter(
+      (task) => task.estimatedHours > 0 && !scheduledTaskIds.has(task.id),
+    );
+  }, [analysis, schedule]);
   const syncedBlocksByTaskId = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const taskId of Object.values(syncedEventTaskMap)) {
@@ -671,6 +680,21 @@ export default function Home() {
       // Ignore localStorage write failures.
     }
   }, []);
+
+  const markSetupPromptSeen = useCallback(() => {
+    setShowInitialSetupPrompt(false);
+    try {
+      window.localStorage.setItem(SETUP_PROMPT_KEY, "1");
+    } catch {
+      // Ignore localStorage write failures.
+    }
+  }, []);
+
+  const openSetupPanels = useCallback(() => {
+    setShowTimePreferences(true);
+    setShowConflictFilters(true);
+    markSetupPromptSeen();
+  }, [markSetupPromptSeen]);
 
   const closeOnboarding = useCallback(() => {
     setShowOnboarding(false);
@@ -720,6 +744,17 @@ export default function Home() {
       window.history.replaceState({}, "", nextUrl);
     }
   }, [loadSampleMode]);
+
+  useEffect(() => {
+    try {
+      const promptSeen = window.localStorage.getItem(SETUP_PROMPT_KEY) === "1";
+      if (!promptSeen) {
+        setShowInitialSetupPrompt(true);
+      }
+    } catch {
+      setShowInitialSetupPrompt(true);
+    }
+  }, []);
 
   useEffect(() => {
     const savedTheme = readStoredTheme();
@@ -1187,6 +1222,7 @@ export default function Home() {
           for (const pair of matchedFromSchedule) {
             minutesByTask.set(pair.taskId, (minutesByTask.get(pair.taskId) ?? 0) + pair.minutes);
           }
+          suppressNextAutoScheduleRefreshRef.current = true;
           setAiAnalysis((current) => {
             if (!current) return current;
             return current.map((task) => {
@@ -1301,6 +1337,7 @@ export default function Home() {
     const key = scheduleBlockKey(block);
     if (committedBlockKeysRef.current.has(key)) return;
     committedBlockKeysRef.current.add(key);
+    suppressNextAutoScheduleRefreshRef.current = true;
     pendingCalendarMatchesRef.current.push({
       taskId: block.taskId,
       taskTitle: block.taskTitle,
@@ -1331,6 +1368,10 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
+    if (suppressNextAutoScheduleRefreshRef.current) {
+      suppressNextAutoScheduleRefreshRef.current = false;
+      return;
+    }
     refreshSchedule({ silent: false });
   }, [refreshSchedule]);
 
@@ -1728,6 +1769,38 @@ export default function Home() {
             </p>
           )}
         </section>
+
+        {showInitialSetupPrompt && !showOnboarding && (
+          <section className="fun-enter rounded-xl border border-sky-200 bg-sky-50/90 p-4 shadow-sm dark:border-sky-700/60 dark:bg-sky-900/25 pink:border-fuchsia-300 pink:bg-fuchsia-100/80">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-sky-700 dark:text-sky-300 pink:text-fuchsia-800">
+              Start Here
+            </p>
+            <h2 className="mt-1 text-base font-black text-slate-900 dark:text-slate-100 pink:text-fuchsia-950">
+              Set your Time Preferences and Conflict Calendar Filters first.
+            </h2>
+            <p className="mt-1 text-xs text-slate-600 dark:text-slate-300 pink:text-fuchsia-900/80">
+              This makes your schedule realistic and conflict-aware before you run Plan My Week.
+            </p>
+            {!connectedCalendar && (
+              <p className="mt-2 text-xs font-semibold text-amber-700 dark:text-amber-300 pink:text-amber-800">
+                Connect Google Calendar to configure conflict filters.
+              </p>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Button type="button" className="h-8 px-3 text-xs" onClick={openSetupPanels}>
+                Open Setup Settings
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-8 px-3 text-xs"
+                onClick={markSetupPromptSeen}
+              >
+                Dismiss
+              </Button>
+            </div>
+          </section>
+        )}
 
         <section
           className={`grid gap-6 xl:grid-cols-[1.2fr_1fr] ${
@@ -2429,6 +2502,13 @@ export default function Home() {
                 )}
               </p>
             )}
+            {unscheduledAnalyzedTasks.length > 0 && (
+              <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 dark:border-amber-700/50 dark:bg-amber-900/20 dark:text-amber-300 pink:border-amber-300 pink:bg-amber-100/70 pink:text-amber-800">
+                {unscheduledAnalyzedTasks.length} analyzed task
+                {unscheduledAnalyzedTasks.length === 1 ? "" : "s"} could not be placed before
+                deadline/time constraints. Expand availability or reduce work hours.
+              </p>
+            )}
             {timeline.length > 0 && (
               <div className="mt-3 rounded-lg border border-slate-200 bg-white/80 p-3 dark:border-slate-700 dark:bg-slate-900/60 pink:border-fuchsia-200 pink:bg-pink-50/80">
                 <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400 pink:text-fuchsia-700">
@@ -2461,9 +2541,9 @@ export default function Home() {
                   subtitle="Run AI analysis and we will draft your week here."
                 />
               )}
-              {schedule.map((block, index) => (
+              {schedule.map((block) => (
                 <div
-                  key={`${block.taskId}-${index}`}
+                  key={scheduleBlockKey(block)}
                   className="fun-enter flex flex-col gap-2 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900 md:flex-row md:items-center md:justify-between"
                 >
                   <div>

@@ -49,23 +49,7 @@ function sanitizeResults(tasks: TaskInput[], results: AIResult[]) {
 
   function deriveSplitSignal(task: TaskInput, result?: AIResult): boolean {
     if (typeof result?.isSplittable === "boolean") return result.isSplittable;
-    const text = `${task.title} ${task.details}`.toLowerCase();
-    const singleBlockSignals = [
-      "shopping trip",
-      "doctor appointment",
-      "dentist appointment",
-      "interview",
-      "flight",
-      "drive to",
-      "commute to",
-      "meeting with",
-      "client call",
-      "haircut",
-      "grocery run",
-      "errand",
-      "pickup",
-    ];
-    return !singleBlockSignals.some((signal) => text.includes(signal));
+    return true;
   }
 
   function deriveNotBeforeISO(task: TaskInput, result?: AIResult): string | null {
@@ -156,7 +140,7 @@ export async function POST(request: NextRequest) {
   const systemPrompt =
     "You are an expert workload planning assistant. Return only strict JSON that matches the requested schema.";
 
-  const userPrompt = `Today is ${today}. Analyze each task for realistic effort and priority for a weekly execution plan.\n\nRules:\n- Infer complexity and business impact from title/details/deadline only.\n- estimatedHours: numeric hours (0.5 to 80)\n- urgencyScore: integer 0-100 based on exact deadline proximity\n- priorityScore: integer 0-100 combining urgency, inferred impact, inferred complexity, and dependency/risk clues\n- priorityLabel: one of Critical|High|Medium|Low\n- analysisReason: <= 180 chars concise rationale\n- isSplittable: boolean. False only if task should be done in one continuous block (e.g., shopping trip, appointment, interview).\n- notBeforeISO: ISO datetime string or null. Use when details imply work cannot start before a specific date/time (e.g., opens on March 1).\n\nReturn JSON only as:\n{\"analyses\":[{\"id\":\"...\",\"estimatedHours\":0,\"urgencyScore\":0,\"priorityScore\":0,\"priorityLabel\":\"Medium\",\"analysisReason\":\"...\",\"isSplittable\":true,\"notBeforeISO\":null}]}\n\nTasks:\n${JSON.stringify(tasks)}`;
+  const userPrompt = `Today is ${today}. Analyze each task for realistic effort and priority for a weekly execution plan.\n\nRules:\n- Infer complexity and business impact from title/details/deadline only.\n- estimatedHours: numeric hours (0.5 to 80)\n- urgencyScore: integer 0-100 based on exact deadline proximity\n- priorityScore: integer 0-100 combining urgency, inferred impact, inferred complexity, and dependency/risk clues\n- priorityLabel: one of Critical|High|Medium|Low\n- analysisReason: <= 180 chars concise rationale\n- isSplittable: boolean. Decide this from task semantics and execution constraints (not keyword matching). Set false only when the task should be done as one continuous session.\n- notBeforeISO: ISO datetime string or null. Use when details imply work cannot start before a specific date/time (e.g., opens on March 1).\n\nReturn JSON only as:\n{\"analyses\":[{\"id\":\"...\",\"estimatedHours\":0,\"urgencyScore\":0,\"priorityScore\":0,\"priorityLabel\":\"Medium\",\"analysisReason\":\"...\",\"isSplittable\":true,\"notBeforeISO\":null}]}\n\nTasks:\n${JSON.stringify(tasks)}`;
 
   const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",

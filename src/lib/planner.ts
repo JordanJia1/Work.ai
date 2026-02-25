@@ -346,7 +346,7 @@ export function generateWeeklySchedule(
     7,
     Math.ceil((latestDeadlineMs - schedulingStart.getTime()) / dayMs) + 1,
   );
-  const planningDays = Math.max(7, Math.min(21, daysUntilLatestDeadline));
+  const planningDays = Math.max(7, Math.min(60, daysUntilLatestDeadline));
   const workDays = nextCalendarDays(schedulingStart, planningDays).filter((day) => {
     const dayRule = preferences.dayRules.find((rule) => rule.weekday === day.getDay());
     return !!dayRule?.enabled;
