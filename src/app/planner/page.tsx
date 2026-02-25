@@ -684,7 +684,6 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     setAuthError(params.get("authError"));
 
-    const hasOnboarded = window.localStorage.getItem(ONBOARDING_KEY) === "1";
     const requestedOnboarding = params.get("onboarding") === "1";
     const requestedSample = params.get("sample") === "1";
 
@@ -692,7 +691,7 @@ export default function Home() {
       loadSampleMode();
       setShowOnboarding(false);
       setOnboardingStep(0);
-    } else if (requestedOnboarding || !hasOnboarded) {
+    } else if (requestedOnboarding) {
       setShowOnboarding(true);
       setOnboardingStep(0);
       setGuidedCalendarClicked(false);
