@@ -1,11 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getValidAccessToken } from "@/lib/google-auth";
-import {
-  BusyInterval,
-  generateWeeklySchedule,
-  normalizeSchedulePreferences,
-  TaskAnalysis,
-} from "@/lib/planner";
+import { BusyInterval, normalizeSchedulePreferences, TaskAnalysis } from "@/lib/planner";
 
 type GoogleErrorPayload = {
   error?: {
@@ -296,9 +291,8 @@ export async function POST(request: NextRequest) {
     busyIntervals = dedupeIntervals([...freeBusyIntervals, ...eventBusyIntervals]);
   }
 
-  const schedule = generateWeeklySchedule(analysis, busyIntervals, schedulePreferences);
   return NextResponse.json({
-    schedule,
+    busyIntervals,
     schedulePreferences,
     busyIntervalsCount: busyIntervals.length,
     calendarsConsidered: calendarIds.length,

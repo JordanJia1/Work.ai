@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Input, Textarea } from "@/components/ui/field";
 import { WorkAiLogo } from "@/components/work-ai-logo";
 import {
+  BusyInterval,
   DEFAULT_SCHEDULE_PREFERENCES,
   createGoogleCalendarLink,
   generateWeeklySchedule,
@@ -513,6 +514,15 @@ function isScheduledBlockArray(value: unknown): value is ScheduledBlock[] {
       typeof block.minutes === "number" &&
       typeof block.calendarDescription === "string"
     );
+  });
+}
+
+function isBusyIntervalArray(value: unknown): value is BusyInterval[] {
+  if (!Array.isArray(value)) return false;
+  return value.every((item) => {
+    if (!item || typeof item !== "object") return false;
+    const interval = item as Partial<BusyInterval>;
+    return typeof interval.startISO === "string" && typeof interval.endISO === "string";
   });
 }
 
@@ -1113,23 +1123,28 @@ export default function Home() {
         });
 
         const data = (await response.json()) as {
-          schedule?: ScheduledBlock[];
+          busyIntervals?: BusyInterval[];
           error?: string;
           actionUrl?: string;
         };
 
-        if (!response.ok || !data.schedule) {
+        if (!response.ok || !isBusyIntervalArray(data.busyIntervals)) {
           const error = new Error(data.error || "Could not generate conflict-aware schedule");
           (error as Error & { actionUrl?: string }).actionUrl = data.actionUrl;
           throw error;
         }
+        const nextSchedule = generateWeeklySchedule(
+          analysis,
+          data.busyIntervals,
+          schedulePreferences,
+        );
 
-        const nextSignature = scheduleSignature(data.schedule);
+        const nextSignature = scheduleSignature(nextSchedule);
         const hadSignature = scheduleSignatureRef.current.length > 0;
         const changed = hadSignature && scheduleSignatureRef.current !== nextSignature;
         scheduleSignatureRef.current = nextSignature;
 
-        setSchedule(data.schedule);
+        setSchedule(nextSchedule);
         setScheduleError(null);
         setScheduleActionUrl(null);
         setLastConflictCheckLabel(
