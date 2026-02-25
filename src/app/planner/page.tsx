@@ -645,6 +645,7 @@ export default function Home() {
   const [overrideUrgencyInput, setOverrideUrgencyInput] = useState<string>("");
   const [photoUploadLoading, setPhotoUploadLoading] = useState(false);
   const [photoUploadError, setPhotoUploadError] = useState<string | null>(null);
+  const [photoUploadMessage, setPhotoUploadMessage] = useState<string | null>(null);
   const celebrationTimer = useRef<number | null>(null);
   const autoReplanTimer = useRef<number | null>(null);
   const scheduleRequestInFlight = useRef(false);
@@ -1559,6 +1560,7 @@ export default function Home() {
 
     setPhotoUploadLoading(true);
     setPhotoUploadError(null);
+    setPhotoUploadMessage(null);
 
     try {
       const payload = new FormData();
@@ -1570,32 +1572,43 @@ export default function Home() {
       });
 
       const data = (await response.json()) as {
+        tasks?: PhotoExtractResult[];
         task?: PhotoExtractResult;
         error?: string;
       };
 
-      if (!response.ok || !data.task) {
+      const extracted = Array.isArray(data.tasks)
+        ? data.tasks
+        : data.task
+          ? [data.task]
+          : [];
+      if (!response.ok || extracted.length === 0) {
         throw new Error(data.error || "Could not extract task from image");
       }
 
-      const title = data.task.title?.trim();
-      if (!title) {
+      const newTasks: TaskInput[] = extracted
+        .map((task) => {
+          const title = task.title?.trim();
+          if (!title) return null;
+          const details = (task.details ?? "").trim();
+          const deadline =
+            task.deadline && isDateTimeLocal(task.deadline)
+              ? task.deadline
+              : fallbackDeadlineLocal();
+          return {
+            id: crypto.randomUUID(),
+            title,
+            details,
+            deadline,
+          };
+        })
+        .filter((task): task is TaskInput => task !== null);
+
+      if (newTasks.length === 0) {
         throw new Error("AI could not detect a task title in the image");
       }
-      const details = (data.task.details ?? "").trim();
-      const deadline =
-        data.task.deadline && isDateTimeLocal(data.task.deadline)
-          ? data.task.deadline
-          : fallbackDeadlineLocal();
 
-      const newTask: TaskInput = {
-        id: crypto.randomUUID(),
-        title,
-        details,
-        deadline,
-      };
-
-      setTasks((current) => [...current, newTask]);
+      setTasks((current) => [...current, ...newTasks]);
       setAiAnalysis(null);
       setAiError(null);
       setOverrideTaskId(null);
@@ -1603,10 +1616,14 @@ export default function Home() {
       setOverridePriorityInput("");
       setOverrideUrgencyInput("");
       setSampleModeActive(false);
+      setPhotoUploadMessage(
+        `Added ${newTasks.length} task${newTasks.length === 1 ? "" : "s"} from photo.`,
+      );
+      const first = newTasks[0];
       setForm({
-        title,
-        details,
-        deadline,
+        title: first.title,
+        details: first.details,
+        deadline: first.deadline,
       });
     } catch (error) {
       setPhotoUploadError(
@@ -1959,6 +1976,11 @@ export default function Home() {
                 {photoUploadError && (
                   <p className="rounded-md bg-rose-100 px-3 py-2 text-xs font-medium text-rose-700">
                     {photoUploadError}
+                  </p>
+                )}
+                {photoUploadMessage && (
+                  <p className="rounded-md bg-emerald-100 px-3 py-2 text-xs font-medium text-emerald-700">
+                    {photoUploadMessage}
                   </p>
                 )}
               </div>

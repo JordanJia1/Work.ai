@@ -10,15 +10,19 @@ type OpenAIChatResponse = {
 
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
-function parseJSONContent(content: string): { task?: { title?: string; details?: string; deadline?: string | null } } {
+type ExtractedTask = {
+  title?: string;
+  details?: string;
+  deadline?: string | null;
+};
+
+function parseJSONContent(content: string): { tasks?: ExtractedTask[]; task?: ExtractedTask } {
   const start = content.indexOf("{");
   const end = content.lastIndexOf("}");
   if (start === -1 || end === -1 || end <= start) {
     throw new Error("Model response did not contain JSON object");
   }
-  return JSON.parse(content.slice(start, end + 1)) as {
-    task?: { title?: string; details?: string; deadline?: string | null };
-  };
+  return JSON.parse(content.slice(start, end + 1)) as { tasks?: ExtractedTask[]; task?: ExtractedTask };
 }
 
 function toDataURL(mimeType: string, bytes: Uint8Array): string {
@@ -54,7 +58,7 @@ export async function POST(request: NextRequest) {
 
   const systemPrompt =
     "You extract task details from images of assignments, notes, screenshots, and to-do lists. Return strict JSON only.";
-  const userPrompt = `Today is ${now}. Extract one primary task from this image and structure it for task intake.\n\nRules:\n- title: short and actionable\n- details: useful context from the image (optional, max 300 chars)\n- deadline: return datetime-local format YYYY-MM-DDTHH:MM when clearly present, otherwise null\n- If multiple tasks are visible, pick the clearest highest-priority one.\n\nReturn only JSON in this shape:\n{\"task\":{\"title\":\"...\",\"details\":\"...\",\"deadline\":null}}`;
+  const userPrompt = `Today is ${now}. Extract tasks from this image and structure them for task intake.\n\nRules:\n- title: short and actionable\n- details: useful context from the image (optional, max 300 chars)\n- deadline: return datetime-local format YYYY-MM-DDTHH:MM when clearly present, otherwise null\n- If multiple tasks are visible, return all clear actionable tasks.\n- If no task is visible, return an empty list.\n\nReturn only JSON in this shape:\n{\"tasks\":[{\"title\":\"...\",\"details\":\"...\",\"deadline\":null}]}`;
 
   const openaiResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -95,23 +99,28 @@ export async function POST(request: NextRequest) {
 
   try {
     const parsed = parseJSONContent(content);
-    const title = parsed.task?.title?.trim();
-    const details = parsed.task?.details?.trim() ?? "";
-    const deadline = parsed.task?.deadline ?? null;
+    const rawTasks = Array.isArray(parsed.tasks)
+      ? parsed.tasks
+      : parsed.task
+        ? [parsed.task]
+        : [];
+    const tasks = rawTasks
+      .map((task) => ({
+        title: task.title?.trim() ?? "",
+        details: task.details?.trim() ?? "",
+        deadline: typeof task.deadline === "string" ? task.deadline : null,
+      }))
+      .filter((task) => task.title.length > 0);
 
-    if (!title) {
+    if (tasks.length === 0) {
       return NextResponse.json(
-        { error: "Could not detect a task title from the image." },
+        { error: "Could not detect any tasks from the image." },
         { status: 422 },
       );
     }
 
     return NextResponse.json({
-      task: {
-        title,
-        details,
-        deadline: typeof deadline === "string" ? deadline : null,
-      },
+      tasks,
     });
   } catch (error) {
     return NextResponse.json(
@@ -125,4 +134,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
