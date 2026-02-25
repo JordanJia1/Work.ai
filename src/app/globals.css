@@ -1,26 +1,100 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+@custom-variant pink (&:where(.pink, .pink *));
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #eef2ff;
+  --foreground: #0f172a;
+}
+
+.dark {
+  --background: #020617;
+  --foreground: #e2e8f0;
+}
+
+.pink {
+  --background: #fff1f7;
+  --foreground: #4a044e;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+* {
+  box-sizing: border-box;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  *, *::before, *::after {
+    transition-property: background-color, border-color, color, fill, stroke, box-shadow;
+    transition-duration: 220ms;
+    transition-timing-function: ease;
+  }
+
+  .fun-enter {
+    animation: fun-enter 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+
+  .celebration-pop {
+    animation: celebration-pop 2.6s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .empty-float {
+    animation: empty-float 3.2s ease-in-out infinite;
+  }
+}
+
+@keyframes fun-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes celebration-pop {
+  0% {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+  18% {
+    opacity: 1;
+    transform: translateY(0) scale(1.01);
+  }
+  72% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.995);
+  }
+}
+
+@keyframes empty-float {
+  0%,
+  100% {
+    transform: translateY(0px) scale(1);
+    box-shadow: 0 8px 18px -14px rgba(15, 23, 42, 0.24);
+  }
+  50% {
+    transform: translateY(-8px) scale(1.01);
+    box-shadow: 0 18px 30px -16px rgba(15, 23, 42, 0.34);
   }
 }
 
 body {
+  margin: 0;
+  min-height: 100vh;
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), sans-serif;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
