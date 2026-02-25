@@ -221,6 +221,13 @@ function isOverlappingBusyWindow(
   });
 }
 
+function blockOverlapsBusy(block: ScheduledBlock, busyIntervals: BusyInterval[]): boolean {
+  const start = new Date(block.startISO);
+  const end = new Date(block.endISO);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return false;
+  return isOverlappingBusyWindow(start, end, busyIntervals);
+}
+
 function formatLocalDateToISO(date: Date): string {
   const timezoneOffset = date.getTimezoneOffset() * 60000;
   const localTime = new Date(date.getTime() - timezoneOffset);
@@ -485,6 +492,17 @@ export function generateWeeklySchedule(
         .sort((a, b) => {
           const aHoursToDeadline = (a.deadlineMs - start.getTime()) / (60 * 60 * 1000);
           const bHoursToDeadline = (b.deadlineMs - start.getTime()) / (60 * 60 * 1000);
+          const dueSoonThresholdHours = 72;
+          const dueSoonGapHours = 24;
+          const aDueSoon = aHoursToDeadline <= dueSoonThresholdHours;
+          const bDueSoon = bHoursToDeadline <= dueSoonThresholdHours;
+          if (aDueSoon !== bDueSoon) return aDueSoon ? -1 : 1;
+          if (
+            Math.abs(aHoursToDeadline - bHoursToDeadline) >= dueSoonGapHours &&
+            (aDueSoon || bDueSoon)
+          ) {
+            return aHoursToDeadline - bHoursToDeadline;
+          }
           const aCriticalSoon = a.priorityScore >= 85 && aHoursToDeadline <= 48 ? 1 : 0;
           const bCriticalSoon = b.priorityScore >= 85 && bHoursToDeadline <= 48 ? 1 : 0;
           if (aCriticalSoon !== bCriticalSoon) return bCriticalSoon - aCriticalSoon;
@@ -529,7 +547,8 @@ export function generateWeeklySchedule(
     }
   }
 
-  return mergeSequentialBlocks(blocks);
+  const mergedBlocks = mergeSequentialBlocks(blocks);
+  return mergedBlocks.filter((block) => !blockOverlapsBusy(block, busyIntervals));
 }
 
 export function toGoogleCalendarDate(isoLikeLocal: string): string {

@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -21,6 +21,12 @@ type FormState = {
   title: string;
   details: string;
   deadline: string;
+};
+
+type PhotoExtractResult = {
+  title: string;
+  details: string;
+  deadline?: string | null;
 };
 
 type GoogleSession = {
@@ -274,6 +280,17 @@ function dateTimeLocalFromDate(date: Date): string {
   const hour = String(date.getHours()).padStart(2, "0");
   const minute = String(date.getMinutes()).padStart(2, "0");
   return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
+function isDateTimeLocal(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value);
+}
+
+function fallbackDeadlineLocal(): string {
+  const fallback = new Date();
+  fallback.setDate(fallback.getDate() + 1);
+  fallback.setHours(17, 0, 0, 0);
+  return dateTimeLocalFromDate(fallback);
 }
 
 function formatHourLabel(hour24: number): string {
@@ -626,6 +643,8 @@ export default function Home() {
   const [overrideHoursInput, setOverrideHoursInput] = useState<string>("");
   const [overridePriorityInput, setOverridePriorityInput] = useState<string>("");
   const [overrideUrgencyInput, setOverrideUrgencyInput] = useState<string>("");
+  const [photoUploadLoading, setPhotoUploadLoading] = useState(false);
+  const [photoUploadError, setPhotoUploadError] = useState<string | null>(null);
   const celebrationTimer = useRef<number | null>(null);
   const autoReplanTimer = useRef<number | null>(null);
   const scheduleRequestInFlight = useRef(false);
@@ -644,6 +663,7 @@ export default function Home() {
   const committedBlockKeysRef = useRef<Set<string>>(new Set());
   const pendingCalendarMatchesRef = useRef<PendingCalendarMatch[]>([]);
   const suppressNextAutoScheduleRefreshRef = useRef(false);
+  const photoFileInputRef = useRef<HTMLInputElement | null>(null);
 
   const analysis = useMemo(() => aiAnalysis ?? [], [aiAnalysis]);
   const analyzedIds = useMemo(() => new Set(analysis.map((task) => task.id)), [analysis]);
@@ -1532,6 +1552,71 @@ export default function Home() {
     setForm(initialForm);
   }
 
+  async function handleTaskPhotoUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setPhotoUploadLoading(true);
+    setPhotoUploadError(null);
+
+    try {
+      const payload = new FormData();
+      payload.append("image", file);
+
+      const response = await fetch("/api/ai/extract-task-image", {
+        method: "POST",
+        body: payload,
+      });
+
+      const data = (await response.json()) as {
+        task?: PhotoExtractResult;
+        error?: string;
+      };
+
+      if (!response.ok || !data.task) {
+        throw new Error(data.error || "Could not extract task from image");
+      }
+
+      const title = data.task.title?.trim();
+      if (!title) {
+        throw new Error("AI could not detect a task title in the image");
+      }
+      const details = (data.task.details ?? "").trim();
+      const deadline =
+        data.task.deadline && isDateTimeLocal(data.task.deadline)
+          ? data.task.deadline
+          : fallbackDeadlineLocal();
+
+      const newTask: TaskInput = {
+        id: crypto.randomUUID(),
+        title,
+        details,
+        deadline,
+      };
+
+      setTasks((current) => [...current, newTask]);
+      setAiAnalysis(null);
+      setAiError(null);
+      setOverrideTaskId(null);
+      setOverrideHoursInput("");
+      setOverridePriorityInput("");
+      setOverrideUrgencyInput("");
+      setSampleModeActive(false);
+      setForm({
+        title,
+        details,
+        deadline,
+      });
+    } catch (error) {
+      setPhotoUploadError(
+        error instanceof Error ? error.message : "Could not extract task from image",
+      );
+    } finally {
+      setPhotoUploadLoading(false);
+    }
+  }
+
   function removeTask(id: string) {
     setTasks((current) => current.filter((task) => task.id !== id));
     setAiAnalysis(null);
@@ -1853,6 +1938,29 @@ export default function Home() {
                 >
                   Add To Queue
                 </Button>
+              </div>
+              <div className="space-y-2">
+                <input
+                  ref={photoFileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleTaskPhotoUpload}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={photoUploadLoading}
+                  onClick={() => photoFileInputRef.current?.click()}
+                >
+                  {photoUploadLoading ? "Reading photo..." : "Upload Photo To Add Task"}
+                </Button>
+                {photoUploadError && (
+                  <p className="rounded-md bg-rose-100 px-3 py-2 text-xs font-medium text-rose-700">
+                    {photoUploadError}
+                  </p>
+                )}
               </div>
             </form>
           </Card>
