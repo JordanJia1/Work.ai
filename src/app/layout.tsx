@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 const sans = Space_Grotesk({
@@ -45,6 +46,7 @@ export default function RootLayout({
       </head>
       <body className={`${sans.variable} ${mono.variable} antialiased`}>
         {children}
+        <Analytics />
       </body>
     </html>
   );
