@@ -1,36 +1,162 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Work.ai
 
-## Getting Started
+AI workflow planner that turns brain-dumped tasks into a conflict-aware weekly schedule, then syncs approved blocks to Google Calendar.
 
-First, run the development server:
+Built with Next.js App Router, Tailwind, and OpenAI.
+
+## Features
+
+- AI task analysis:
+  - effort estimate (`estimatedHours`)
+  - urgency and priority scoring
+  - split vs non-split recommendation
+  - date gating (`notBeforeISO`) when work cannot start yet
+- Conflict-aware scheduling against Google Calendar busy times
+- Per-day scheduling windows (time preferences)
+- Google Calendar conflict filters (ignore selected calendars)
+- Live calendar week snapshot with overlap visualization
+- One-click "Add to Google Calendar" links for planned blocks
+- Persistent planner state:
+  - local storage
+  - optional cloud sync via Supabase (per Google user)
+- Photo-to-task intake:
+  - upload an image
+  - AI extracts one or multiple tasks
+  - auto-adds to queue
+- Theme support: light, dark, pink
+- Vercel Analytics integrated globally
+
+## Tech Stack
+
+- Next.js 16 (App Router)
+- React 19
+- Tailwind CSS 4
+- OpenAI Chat Completions API (analysis + image extraction)
+- Google OAuth + Google Calendar API
+- Supabase REST API (optional persistence)
+- Vercel Analytics (`@vercel/analytics`)
+
+## Project Structure
+
+- `src/app/page.tsx` - landing page
+- `src/app/planner/page.tsx` - main planner UI
+- `src/app/api/ai/analyze/route.ts` - AI analysis endpoint
+- `src/app/api/ai/extract-task-image/route.ts` - photo task extraction endpoint
+- `src/app/api/planner/schedule/route.ts` - Google conflict fetch endpoint
+- `src/app/api/google/*` - calendar snapshot, calendar list, token helpers
+- `src/lib/planner.ts` - scheduling engine + models
+- `src/lib/google-auth.ts` - OAuth cookie/token handling
+- `src/lib/cloud-state.ts` - Supabase cloud state helpers
+
+## Environment Variables
+
+Create `.env.local` from `.env.example`:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Required:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- `NEXT_PUBLIC_APP_URL`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI`
+- `GOOGLE_OAUTH_COOKIE_SECRET` (>= 32 chars, random)
+- `OPENAI_API_KEY`
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Optional:
 
-## Learn More
+- `OPENAI_MODEL` (default: `gpt-4o-mini`)
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_PLANNER_TABLE` (default: `planner_states`)
 
-To learn more about Next.js, take a look at the following resources:
+## Google Cloud Setup
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Create/select a Google Cloud project.
+2. Enable APIs:
+   - Google Calendar API
+3. Configure OAuth consent screen:
+   - add test users while in Testing mode
+4. Create OAuth 2.0 Client ID (Web application).
+5. Add authorized origins:
+   - `http://localhost:3000`
+   - your production domain(s)
+6. Add redirect URIs:
+   - `http://localhost:3000/api/auth/google/callback`
+   - `https://<your-domain>/api/auth/google/callback`
+7. Set env vars in `.env.local` and your deployment platform.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Optional Supabase Setup (Cloud Sync)
 
-## Deploy on Vercel
+If you want planner state shared across sessions/devices:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+1. Create Supabase project.
+2. Create table (default name `planner_states`) with:
+   - `user_id text primary key`
+   - `state jsonb not null`
+   - `updated_at timestamptz default now()`
+3. Put `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in env.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+If Supabase env vars are not set, app runs in local-only persistence mode.
+
+## Local Development
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000`.
+
+## Build & Run Production
+
+```bash
+npm run build
+npm run start
+```
+
+## Deploy to Vercel
+
+1. Push repo to GitHub/GitLab/Bitbucket.
+2. Import project in Vercel.
+3. Add all environment variables in Vercel Project Settings.
+4. Update Google OAuth authorized origin/redirect URI to your deployed domain.
+5. Redeploy.
+
+## How Scheduling Works (High Level)
+
+1. Tasks are analyzed by AI.
+2. Planner requests Google busy intervals from `/api/planner/schedule`.
+3. Final schedule is generated client-side using:
+   - AI analyses
+   - busy intervals
+   - user time preferences
+4. Suggested blocks are added to Google via prefilled calendar links.
+5. Live snapshot polling confirms additions and marks synced blocks.
+
+## Troubleshooting
+
+- `Error 403 access_denied` on Google login:
+  - add your account as OAuth test user or publish app
+- `Google Calendar API has not been used / disabled`:
+  - enable Google Calendar API in the same GCP project
+- Conflicts not detected:
+  - ensure calendar is not in ignored filters
+  - refresh snapshot and rerun Plan My Week
+- Cloud sync says `cloud not configured`:
+  - set Supabase env vars
+- Photo upload extracts weak details:
+  - use clearer image/crop and rerun upload
+
+## Security Notes
+
+- Never commit `.env.local`.
+- Rotate exposed secrets immediately.
+- `GOOGLE_OAUTH_COOKIE_SECRET` should be long random data.
+- Supabase `SERVICE_ROLE` key must stay server-side only.
+
+## License
+
+Add your preferred license (MIT, Apache-2.0, proprietary, etc.).
