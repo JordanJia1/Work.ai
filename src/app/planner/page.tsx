@@ -2506,7 +2506,14 @@ export default function Home() {
               <p className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 dark:border-amber-700/50 dark:bg-amber-900/20 dark:text-amber-300 pink:border-amber-300 pink:bg-amber-100/70 pink:text-amber-800">
                 {unscheduledAnalyzedTasks.length} analyzed task
                 {unscheduledAnalyzedTasks.length === 1 ? "" : "s"} could not be placed before
-                deadline/time constraints. Expand availability or reduce work hours.
+                deadline/time constraints:{" "}
+                {unscheduledAnalyzedTasks
+                  .slice(0, 4)
+                  .map((task) => `"${task.title}"`)
+                  .join(", ")}
+                {unscheduledAnalyzedTasks.length > 4
+                  ? ` +${unscheduledAnalyzedTasks.length - 4} more`
+                  : ""}. Expand availability or reduce work hours.
               </p>
             )}
             {timeline.length > 0 && (

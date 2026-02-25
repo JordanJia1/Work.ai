@@ -73,7 +73,7 @@ async function inferConstraintsWithAI(
   const today = new Date().toISOString().slice(0, 10);
   const systemPrompt =
     "You are an expert execution-planning assistant. Return only strict JSON.";
-  const userPrompt = `Today is ${today}. For each task, decide whether it should be split across multiple sessions or done as one continuous session.\n\nRules:\n- isSplittable: false only if splitting would materially harm execution quality or realism.\n- notBeforeISO: set only when task text implies work cannot start before a specific date/time; otherwise null.\n- Use semantic reasoning from title/details/deadline, not keyword matching.\n\nReturn JSON only as:\n{\"constraints\":[{\"id\":\"...\",\"isSplittable\":true,\"notBeforeISO\":null}]}\n\nTasks:\n${JSON.stringify(tasks)}`;
+  const userPrompt = `Today is ${today}. For each task, decide whether it should be split across multiple sessions or done as one continuous session.\n\nRules:\n- isSplittable: false when splitting would materially harm execution quality or realism.\n- Typically non-splittable: errands/trips/appointments/events that are naturally completed in one outing (for example, buying materials in one store run).\n- Typically splittable: writing, studying, coding, planning, and most desk work.\n- notBeforeISO: set only when task text implies work cannot start before a specific date/time; otherwise null.\n- Use semantic reasoning from title/details/deadline, not keyword matching.\n\nReturn JSON only as:\n{\"constraints\":[{\"id\":\"...\",\"isSplittable\":true,\"notBeforeISO\":null}]}\n\nTasks:\n${JSON.stringify(tasks)}`;
 
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -114,16 +114,11 @@ function sanitizeResults(
 
   function deriveSplitSignal(task: TaskInput, result?: AIResult): boolean {
     const constraint = constraintsById.get(task.id);
-    const mainSignal = typeof result?.isSplittable === "boolean" ? result.isSplittable : null;
     const constraintSignal =
       typeof constraint?.isSplittable === "boolean" ? constraint.isSplittable : null;
+    const mainSignal = typeof result?.isSplittable === "boolean" ? result.isSplittable : null;
 
-    if (mainSignal !== null && constraintSignal !== null) {
-      if (mainSignal === constraintSignal) return mainSignal;
-      const estimated = Number(result?.estimatedHours) || 0;
-      // If models disagree, prefer split-friendly behavior for larger tasks.
-      return estimated >= 1.5;
-    }
+    // The dedicated constraints pass is specialized for execution-shape decisions.
     if (constraintSignal !== null) return constraintSignal;
     if (mainSignal !== null) return mainSignal;
     return true;
