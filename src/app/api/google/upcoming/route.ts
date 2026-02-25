@@ -95,7 +95,6 @@ export async function GET(request: NextRequest) {
   const calendarListPayload = (await calendarListResponse.json()) as GoogleCalendarListResponse;
   const calendarIds = (calendarListPayload.items ?? [])
     .filter((calendar) => calendar.id)
-    .filter((calendar) => calendar.selected !== false)
     .map((calendar) => calendar.id as string)
     .filter((calendarId) => !ignoredCalendarIds.has(calendarId));
 

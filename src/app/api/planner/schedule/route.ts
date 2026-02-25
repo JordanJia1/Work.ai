@@ -166,7 +166,6 @@ async function getSelectedCalendarIds(
   const payload = (await response.json()) as GoogleCalendarListResponse;
   const ids = (payload.items ?? [])
     .filter((cal) => cal.id)
-    .filter((cal) => cal.selected !== false)
     .filter((cal) => !ignoredCalendarIds.has(cal.id as string))
     .map((cal) => cal.id as string);
 
@@ -202,8 +201,15 @@ export async function POST(request: NextRequest) {
   }
 
   const timeMin = new Date();
+  const latestDeadlineMs = analysis.reduce((latest, task) => {
+    const parsed = new Date(task.deadline).getTime();
+    return Number.isFinite(parsed) ? Math.max(latest, parsed) : latest;
+  }, timeMin.getTime());
+  const dayMs = 24 * 60 * 60 * 1000;
+  const daysUntilLatestDeadline = Math.ceil((latestDeadlineMs - timeMin.getTime()) / dayMs) + 1;
+  const conflictWindowDays = Math.max(14, Math.min(60, daysUntilLatestDeadline));
   const timeMax = new Date();
-  timeMax.setDate(timeMax.getDate() + 14);
+  timeMax.setDate(timeMax.getDate() + conflictWindowDays);
 
   const calendarIds = await getSelectedCalendarIds(accessToken, ignoredCalendarIds);
 
@@ -261,7 +267,7 @@ export async function POST(request: NextRequest) {
       orderBy: "startTime",
       timeMin: timeMin.toISOString(),
       timeMax: timeMax.toISOString(),
-      maxResults: "250",
+      maxResults: "1000",
     });
     const eventResponses = await Promise.allSettled(
       calendarIds.map(async (id) => {
