@@ -2380,7 +2380,7 @@ export default function Home() {
             </div>
             {showOnboarding && onboardingStep === 2 && (
               <p className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 dark:border-emerald-700/60 dark:bg-emerald-900/20 dark:text-emerald-300 pink:border-fuchsia-300 pink:bg-fuchsia-100/80 pink:text-fuchsia-800">
-                Step 3: Click any <span className="underline">Add to Google Calendar</span> button.
+                Click any <span className="underline">Add to Google Calendar</span> button.
               </p>
             )}
             {connectedCalendar && lastConflictCheckLabel && (
