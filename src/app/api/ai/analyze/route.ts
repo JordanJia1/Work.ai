@@ -20,6 +20,12 @@ type OpenAIChatResponse = {
   }>;
 };
 
+type ConstraintResult = {
+  id: string;
+  isSplittable: boolean;
+  notBeforeISO: string | null;
+};
+
 const DEFAULT_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 
 function clamp(value: number, min: number, max: number): number {
@@ -44,15 +50,95 @@ function parseJSONContent(content: string): AIResult[] {
   return parsed.analyses;
 }
 
-function sanitizeResults(tasks: TaskInput[], results: AIResult[]) {
+function parseConstraintContent(content: string): ConstraintResult[] {
+  const start = content.indexOf("{");
+  const end = content.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error("Constraint response did not contain JSON object");
+  }
+
+  const parsed = JSON.parse(content.slice(start, end + 1)) as {
+    constraints?: ConstraintResult[];
+  };
+  if (!Array.isArray(parsed.constraints)) {
+    throw new Error("Invalid constraint JSON schema returned by model");
+  }
+  return parsed.constraints;
+}
+
+async function inferConstraintsWithAI(
+  apiKey: string,
+  tasks: TaskInput[],
+): Promise<Map<string, ConstraintResult>> {
+  const today = new Date().toISOString().slice(0, 10);
+  const systemPrompt =
+    "You are an expert execution-planning assistant. Return only strict JSON.";
+  const userPrompt = `Today is ${today}. For each task, decide whether it should be split across multiple sessions or done as one continuous session.\n\nRules:\n- isSplittable: false only if splitting would materially harm execution quality or realism.\n- notBeforeISO: set only when task text implies work cannot start before a specific date/time; otherwise null.\n- Use semantic reasoning from title/details/deadline, not keyword matching.\n\nReturn JSON only as:\n{\"constraints\":[{\"id\":\"...\",\"isSplittable\":true,\"notBeforeISO\":null}]}\n\nTasks:\n${JSON.stringify(tasks)}`;
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: DEFAULT_MODEL,
+      response_format: { type: "json_object" },
+      temperature: 0,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+    }),
+  });
+
+  if (!response.ok) return new Map();
+  const payload = (await response.json()) as OpenAIChatResponse;
+  const content = payload.choices?.[0]?.message?.content;
+  if (!content) return new Map();
+
+  try {
+    const parsed = parseConstraintContent(content);
+    return new Map(parsed.map((item) => [item.id, item]));
+  } catch {
+    return new Map();
+  }
+}
+
+function sanitizeResults(
+  tasks: TaskInput[],
+  results: AIResult[],
+  constraintsById: Map<string, ConstraintResult>,
+) {
   const byId = new Map(results.map((result) => [result.id, result]));
 
   function deriveSplitSignal(task: TaskInput, result?: AIResult): boolean {
-    if (typeof result?.isSplittable === "boolean") return result.isSplittable;
+    const constraint = constraintsById.get(task.id);
+    const mainSignal = typeof result?.isSplittable === "boolean" ? result.isSplittable : null;
+    const constraintSignal =
+      typeof constraint?.isSplittable === "boolean" ? constraint.isSplittable : null;
+
+    if (mainSignal !== null && constraintSignal !== null) {
+      if (mainSignal === constraintSignal) return mainSignal;
+      const estimated = Number(result?.estimatedHours) || 0;
+      // If models disagree, prefer split-friendly behavior for larger tasks.
+      return estimated >= 1.5;
+    }
+    if (constraintSignal !== null) return constraintSignal;
+    if (mainSignal !== null) return mainSignal;
     return true;
   }
 
   function deriveNotBeforeISO(task: TaskInput, result?: AIResult): string | null {
+    const constraint = constraintsById.get(task.id);
+    const constraintValue = constraint?.notBeforeISO;
+    if (typeof constraintValue === "string" && constraintValue.trim().length > 0) {
+      const parsed = new Date(constraintValue);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed.toISOString();
+      }
+    }
+
     const modelValue = result?.notBeforeISO;
     if (typeof modelValue === "string" && modelValue.trim().length > 0) {
       const parsed = new Date(modelValue);
@@ -179,7 +265,8 @@ export async function POST(request: NextRequest) {
 
   try {
     const parsed = parseJSONContent(content);
-    return NextResponse.json({ analyses: sanitizeResults(tasks, parsed) });
+    const constraintsById = await inferConstraintsWithAI(apiKey, tasks);
+    return NextResponse.json({ analyses: sanitizeResults(tasks, parsed, constraintsById) });
   } catch (error) {
     return NextResponse.json(
       {

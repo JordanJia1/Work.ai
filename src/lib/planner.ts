@@ -392,7 +392,6 @@ export function generateWeeklySchedule(
     const blockEnd = addMinutes(start, totalMinutes);
     if (blockEnd > dayEnd) return false;
     if (deadlineMs < blockEnd.getTime()) return false;
-    if (totalMinutes > preferences.maxContinuousFocusMinutes) return false;
 
     for (let cursor = new Date(start); cursor < blockEnd; cursor = addMinutes(cursor, slotMinutes)) {
       const slotEnd = addMinutes(cursor, slotMinutes);
@@ -479,19 +478,26 @@ export function generateWeeklySchedule(
         .filter((task) => task.notBeforeMs === null || start.getTime() >= task.notBeforeMs)
         .filter(
           (task) =>
-            task.isSplittable ||
-            task.totalRoundedMinutes <= preferences.maxContinuousFocusMinutes,
-        )
-        .filter(
-          (task) =>
             workedMinutesToday +
               (task.isSplittable ? slotMinutes : task.totalRoundedMinutes) <=
             preferences.maxWorkMinutesPerDay,
         )
         .sort((a, b) => {
+          const aHoursToDeadline = (a.deadlineMs - start.getTime()) / (60 * 60 * 1000);
+          const bHoursToDeadline = (b.deadlineMs - start.getTime()) / (60 * 60 * 1000);
+          const aCriticalSoon = a.priorityScore >= 85 && aHoursToDeadline <= 48 ? 1 : 0;
+          const bCriticalSoon = b.priorityScore >= 85 && bHoursToDeadline <= 48 ? 1 : 0;
+          if (aCriticalSoon !== bCriticalSoon) return bCriticalSoon - aCriticalSoon;
+          if (a.priorityScore !== b.priorityScore) return b.priorityScore - a.priorityScore;
+          if (a.urgencyScore !== b.urgencyScore) return b.urgencyScore - a.urgencyScore;
+          const aSlack =
+            a.deadlineMs - start.getTime() - Math.max(a.remainingMinutes, slotMinutes) * 60_000;
+          const bSlack =
+            b.deadlineMs - start.getTime() - Math.max(b.remainingMinutes, slotMinutes) * 60_000;
+          if (aSlack !== bSlack) return aSlack - bSlack;
           const deadlineDiff = a.deadlineMs - b.deadlineMs;
           if (deadlineDiff !== 0) return deadlineDiff;
-          return b.priorityScore - a.priorityScore;
+          return 0;
         });
 
       const chosen = candidates.find((task) => {
